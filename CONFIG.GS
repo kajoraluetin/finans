@@ -331,3 +331,4 @@ Object.freeze(CONFIG.CACHE);
 Object.freeze(CONFIG.MESSAGES);
 Object.freeze(CONFIG.ISLEM_TIPLERI);
 Object.freeze(CONFIG.PLATFORMLAR);
+

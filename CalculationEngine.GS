@@ -17,6 +17,133 @@
  */
 const CalculationEngine = {
 
+  _round(value, digits = 2) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    const p = Math.pow(10, digits);
+    return Math.round(n * p) / p;
+  },
+
+  _isEmptyValue(value, options = {}) {
+    const treatZeroAsEmpty = options.treatZeroAsEmpty !== false;
+    if (value === null || value === undefined || value === '') return true;
+    if (treatZeroAsEmpty && typeof value === 'number' && value === 0) return true;
+    return false;
+  },
+
+  _setIfEmpty(target, key, nextValue, options = {}) {
+    if (!target) return;
+    if (!this._isEmptyValue(target[key], options)) return;
+    target[key] = nextValue;
+  },
+
+  _resolveFxRates() {
+    const usd = DataReader.getDolarPrice();
+    const eur = DataReader.getEuroPrice();
+    const gram = DataReader.getGramAltinPrice();
+
+    return {
+      usdTry: usd && usd.price ? Number(usd.price) : 0,
+      eurTry: eur && eur.price ? Number(eur.price) : 0,
+      gramAltinTry: gram && gram.price ? Number(gram.price) : 0
+    };
+  },
+
+  _convertToTL(amount, currency, rates) {
+    const val = Number(amount || 0);
+    if (!Number.isFinite(val)) return 0;
+
+    const c = String(currency || 'TL').trim().toUpperCase();
+    if (c === 'TL' || c === 'TRY') return val;
+    if (c === 'USD') return val * (rates.usdTry || 0);
+    if (c === 'EUR') return val * (rates.eurTry || 0);
+    if (c === 'ALTIN' || c === 'XAU') return val * (rates.gramAltinTry || 0);
+
+    // Bilinmeyen birimlerde ham değeri koru (TL varsayımı)
+    return val;
+  },
+
+  /**
+   * Portföy kayıtlarındaki boş hesap alanlarını doldurur.
+   *
+   * Doldurulan alanlar (boş ise):
+   * - yatirilanTutar, yatirilanTL
+   * - guncelTutar, guncelTL
+   * - karZararTutar, karZararTL, karZararYuzde
+   * - durum
+   * - portfoyAgirlik, kategoriAgirlik
+   */
+  fillEmptyComputedFields(portfolio, options = {}) {
+    const rows = Array.isArray(portfolio) ? portfolio.map(item => ({ ...item })) : [];
+    const fillOptions = {
+      treatZeroAsEmpty: options.treatZeroAsEmpty !== false
+    };
+
+    const rates = this._resolveFxRates();
+
+    // 1) Satır bazlı alanları doldur
+    rows.forEach(item => {
+      const adet = Number(item.adet || 0);
+      const birimFiyat = Number(item.birimFiyat || 0);
+      const yatirilanTutarCalc = this._round(adet * birimFiyat, 4);
+      this._setIfEmpty(item, 'yatirilanTutar', yatirilanTutarCalc, fillOptions);
+
+      const yatirilanTLCalc = this._round(
+        this._convertToTL(item.yatirilanTutar, item.birimi, rates),
+        2
+      );
+      this._setIfEmpty(item, 'yatirilanTL', yatirilanTLCalc, fillOptions);
+
+      const priceInfo = DataReader.getPortfolioItemPrice(item);
+      const guncelBirimFiyat = priceInfo && priceInfo.price ? Number(priceInfo.price) : birimFiyat;
+      const guncelTutarCalc = this._round(adet * guncelBirimFiyat, 4);
+      this._setIfEmpty(item, 'guncelTutar', guncelTutarCalc, fillOptions);
+
+      const guncelTLCalc = this._round(
+        this._convertToTL(item.guncelTutar, item.birimi, rates),
+        2
+      );
+      this._setIfEmpty(item, 'guncelTL', guncelTLCalc, fillOptions);
+
+      const karZararTutarCalc = this._round((item.guncelTutar || 0) - (item.yatirilanTutar || 0), 4);
+      this._setIfEmpty(item, 'karZararTutar', karZararTutarCalc, fillOptions);
+
+      const karZararTLCalc = this._round((item.guncelTL || 0) - (item.yatirilanTL || 0), 2);
+      this._setIfEmpty(item, 'karZararTL', karZararTLCalc, fillOptions);
+
+      const payda = Number(item.yatirilanTutar || 0);
+      const karZararYuzdeCalc = payda === 0 ? 0 : this._round(((item.karZararTutar || 0) / payda) * 100, 2);
+      this._setIfEmpty(item, 'karZararYuzde', karZararYuzdeCalc, fillOptions);
+
+      const durumCalc = (item.karZararTutar || 0) > 0 ? 'KARDA' : (item.karZararTutar || 0) < 0 ? 'ZARARDA' : 'NÖTR';
+      this._setIfEmpty(item, 'durum', durumCalc, { treatZeroAsEmpty: false });
+    });
+
+    // 2) Ağırlıkları doldur
+    const totalGuncelTL = rows.reduce((sum, r) => sum + Number(r.guncelTL || 0), 0);
+    const categoryTotals = {};
+    rows.forEach(r => {
+      const key = r.kategori || 'BELİRSİZ';
+      categoryTotals[key] = (categoryTotals[key] || 0) + Number(r.guncelTL || 0);
+    });
+
+    rows.forEach(item => {
+      const itemGuncelTL = Number(item.guncelTL || 0);
+      const portfoyAgirlikCalc = totalGuncelTL === 0 ? 0 : this._round((itemGuncelTL / totalGuncelTL) * 100, 2);
+      this._setIfEmpty(item, 'portfoyAgirlik', portfoyAgirlikCalc, fillOptions);
+
+      const categoryTotal = categoryTotals[item.kategori || 'BELİRSİZ'] || 0;
+      const kategoriAgirlikCalc = categoryTotal === 0 ? 0 : this._round((itemGuncelTL / categoryTotal) * 100, 2);
+      this._setIfEmpty(item, 'kategoriAgirlik', kategoriAgirlikCalc, fillOptions);
+    });
+
+    return {
+      rows,
+      rates,
+      totalGuncelTL: this._round(totalGuncelTL, 2)
+    };
+  },
+
   /**
    * FIFO kar / zarar hesaplar
    * @param {Array<Object>} portfolio
@@ -216,6 +343,45 @@ const CalculationEngine = {
     return assetMap;
   }
 };
+
+/**
+ * 🧪 BOŞ ALAN DOLDURMA TESTİ
+ */
+function test_CalculationEngine_FillEmptyFields() {
+  console.log('🧪 CalculationEngine - Boş Alan Doldurma Testi');
+  console.log('='.repeat(80));
+
+  const portfolio = DataReader.readPortfolio(true);
+  console.log(`📥 Okunan portföy: ${portfolio.length} kayıt`);
+
+  const result = CalculationEngine.fillEmptyComputedFields(portfolio, {
+    treatZeroAsEmpty: true
+  });
+
+  console.log(`💱 Kullanılan kur/fiyatlar: ${JSON.stringify(result.rates)}`);
+  console.log(`💰 Toplam güncel TL: ${result.totalGuncelTL}`);
+
+  const fields = [
+    'yatirilanTutar', 'yatirilanTL',
+    'guncelTutar', 'guncelTL',
+    'karZararTutar', 'karZararTL', 'karZararYuzde',
+    'durum', 'portfoyAgirlik', 'kategoriAgirlik'
+  ];
+
+  console.log('\n📊 DOLDURULAN ALAN ÖZETİ:');
+  fields.forEach(field => {
+    const filled = result.rows.filter(r => r[field] !== null && r[field] !== undefined && r[field] !== '' && !(typeof r[field] === 'number' && r[field] === 0)).length;
+    console.log(`   - ${field}: dolu=${filled}/${result.rows.length}`);
+  });
+
+  console.log('\n📌 İLK 5 KAYIT (hesaplanan alanlarla):');
+  result.rows.slice(0, 5).forEach((r, i) => {
+    console.log(`${i + 1}. ${r.baslik} | birim=${r.birimi} | adet=${r.adet} | yatirilanTutar=${r.yatirilanTutar} | guncelTutar=${r.guncelTutar} | karZararTutar=${r.karZararTutar} | durum=${r.durum}`);
+  });
+
+  console.log('='.repeat(80));
+  return result;
+}
 /**
  * 🧪 CALCULATION ENGINE TESTİ - GERÇEK VERİLER ÜZERİNDE
  * 

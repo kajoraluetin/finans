@@ -1,4 +1,5 @@
 /**
+ * SON GÜNCELLEME: 2026-02-11 23:59 (RAW-vs-CACHE DEBUG REVISION)
  * ======================================================
  * DATA READER - GÜNCELLENMİŞ VERSİYON (TÜM SÜTUNLAR + GEÇMİŞ FİYATLAR)
  * ------------------------------------------------------
@@ -26,6 +27,26 @@ const DataReader = {
     lastFetchCURRENCY: null,
     lastFetchGOLD: null,
     CACHE_DURATION: 5 * 60 * 1000, // 5 dakika (milisaniye)
+  },
+
+  /**
+   * Parse davranışı seçenekleri
+   * numericEmptyAsNull=true olduğunda boş numeric hücreler 0 yerine null döner.
+   */
+  _parseOptions: {
+    numericEmptyAsNull: false
+  },
+
+  setParseOptions(options = {}) {
+    this._parseOptions = {
+      ...this._parseOptions,
+      ...options
+    };
+    console.log(`⚙️ Parse options güncellendi: ${JSON.stringify(this._parseOptions)}`);
+  },
+
+  getParseOptions() {
+    return { ...this._parseOptions };
   },
 
   // ==================== MEVCUT PORFÖY OKUMA KODLARI ====================
@@ -490,122 +511,200 @@ const DataReader = {
   // ==================== DEBUG FONKSİYONLARI ====================
 
   /**
-   * Geçmiş veri yapısını debug et
+   * Karşılaştırma için değeri normalize et
    */
-  debugHistoricalData() {
-    console.log('🔍 DATA READER GEÇMİŞ VERİ DEBUG');
-    console.log('='.repeat(80));
-    
-    try {
-      // Hisse verisi
-      console.log('\n📈 HİSSE VERİSİ:');
-      const stocks = this.readHistoricalStockPrices();
-      console.log(`   Toplam kayıt: ${stocks.length}`);
-      
-      if (stocks.length > 0) {
-        const uniqueSymbols = [...new Set(stocks.map(item => item.symbol))];
-        console.log(`   Benzersiz hisse sayısı: ${uniqueSymbols.length}`);
-        
-        // İlk 3 hisse için güncel fiyat
-        uniqueSymbols.slice(0, 3).forEach(symbol => {
-          const price = this.getCurrentPrice(symbol, 'STOCK');
-          if (price) {
-            const dateStr = price.date ? 
-              Utilities.formatDate(price.date, 'GMT', 'dd.MM.yyyy') : 'Tarih yok';
-            console.log(`   ${symbol}: ${price.price} (${dateStr})`);
-          }
-        });
-      }
-      
-      // Döviz verisi
-      console.log('\n💱 DÖVİZ VERİSİ:');
-      const currencies = this.readHistoricalCurrencyPrices();
-      console.log(`   Toplam kayıt: ${currencies.length}`);
-      
-      // Önemli dövizler
-      const importantCurrencies = ['USDTRY=X', 'EURTRY=X'];
-      importantCurrencies.forEach(symbol => {
-        const price = this.getCurrentPrice(symbol, 'CURRENCY');
-        if (price) {
-          const dateStr = price.date ? 
-            Utilities.formatDate(price.date, 'GMT', 'dd.MM.yyyy') : 'Tarih yok';
-          console.log(`   ${symbol}: ${price.price} (${dateStr})`);
-        }
-      });
-      
-      // Altın verisi
-      console.log('\n🏅 ALTIN VERİSİ:');
-      const golds = this.readHistoricalGoldPrices();
-      console.log(`   Toplam kayıt: ${golds.length}`);
-      
-      // Önemli altın türleri
-      const importantGolds = ['gram-altin', 'ons'];
-      importantGolds.forEach(symbol => {
-        const price = this.getCurrentPrice(symbol, 'GOLD');
-        if (price) {
-          const dateStr = price.date ? 
-            Utilities.formatDate(price.date, 'GMT', 'dd.MM.yyyy') : 'Tarih yok';
-          console.log(`   ${symbol}: ${price.price} (${dateStr})`);
-        }
-      });
-      
-    } catch (error) {
-      console.error('❌ Geçmiş veri debug hatası:', error);
+  _normalizeForCompare(value) {
+    if (value === null || value === undefined || value === '') return '';
+    if (value instanceof Date) {
+      return isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
     }
-    
-    console.log('\n' + '='.repeat(80));
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? Number(value.toFixed(8)) : 0;
+    }
+    return value.toString().trim();
   },
 
   /**
-   * Tüm verileri debug et
+   * Cache satırı için özet bilgi üret
    */
-  debugAllData() {
-    console.log('🔍 DATA READER TÜM VERİ DEBUG');
-    console.log('='.repeat(80));
-    
-    // Portföy
-    console.log('\n📖 PORFÖY VERİSİ:');
-    const portfolio = this.readPortfolio();
-    console.log(`   Toplam: ${portfolio.length} kayıt`);
-    
-    if (portfolio.length > 0) {
-      console.log('   İlk 3 kayıt:');
-      portfolio.slice(0, 3).forEach(item => {
-        console.log(`   - ${item.baslik} (${item.kategori}): ${item.adet} adet`);
-      });
+  _getCacheStatus(cacheKey, lastFetchKey, label) {
+    const cacheData = this._cache[cacheKey];
+    const lastFetch = this._cache[lastFetchKey];
+    const now = new Date().getTime();
+    const ttlMs = this._cache.CACHE_DURATION;
+
+    const count = Array.isArray(cacheData) ? cacheData.length : 0;
+    const ageMs = lastFetch ? now - lastFetch.getTime() : null;
+
+    return {
+      label: label,
+      cacheKey: cacheKey,
+      count: count,
+      ageSec: ageMs !== null ? Math.floor(ageMs / 1000) : null,
+      remainingSec: ageMs !== null ? Math.max(0, Math.floor((ttlMs - ageMs) / 1000)) : null,
+      isExpired: ageMs !== null ? ageMs >= ttlMs : false,
+      lastFetchIso: lastFetch ? lastFetch.toISOString() : null,
+      sample: Array.isArray(cacheData) && cacheData.length > 0 ? cacheData[0] : null
+    };
+  },
+
+  /**
+   * Cache'e basılan verileri göster (özet + örnek)
+   */
+  debugCacheStatus(options = {}) {
+    const showSamples = options.showSamples !== false;
+
+    console.log('💾 DATA READER CACHE KONTROLÜ');
+
+    const rows = [
+      this._getCacheStatus('portfolio', 'lastFetchPortfolio', 'PORTFÖY'),
+      this._getCacheStatus('historicalSTOCK', 'lastFetchSTOCK', 'HİSSE GEÇMİŞ'),
+      this._getCacheStatus('historicalCURRENCY', 'lastFetchCURRENCY', 'DÖVİZ GEÇMİŞ'),
+      this._getCacheStatus('historicalGOLD', 'lastFetchGOLD', 'ALTIN GEÇMİŞ')
+    ];
+
+    rows.forEach(row => {
+      const ageText = row.ageSec === null ? '-' : `${row.ageSec}s`;
+      const ttlText = row.remainingSec === null ? '-' : `${row.remainingSec}s`;
+      const state = row.count === 0 ? 'BOŞ' : row.isExpired ? 'SÜRESİ DOLDU' : 'AKTİF';
+      console.log(`   ${row.label.padEnd(14)} | durum=${state.padEnd(12)} | kayıt=${String(row.count).padStart(5)} | yaş=${ageText.padStart(6)} | ttl=${ttlText.padStart(6)}`);
+
+      if (showSamples) {
+        if (row.sample) {
+          if (row.cacheKey === 'portfolio') {
+            console.log(`      ↳ örnek: id=${row.sample.id || '-'}, başlık=${row.sample.baslik || '-'}, kategori=${row.sample.kategori || '-'}, adet=${row.sample.adet || 0}`);
+          } else {
+            console.log(`      ↳ örnek: symbol=${row.sample.symbol || '-'}, date=${row.sample.date || '-'}, close=${row.sample.close || '-'}`);
+          }
+        } else {
+          console.log('      ↳ örnek: -');
+        }
+      }
+    });
+  },
+
+  /**
+   * Ham portföy satırı ile parse edilmiş objeyi karşılaştır
+   */
+  debugRawVsParsed(options = {}) {
+    const forceRefresh = options.forceRefresh === true;
+    const limit = options.limit || 5;
+
+    console.log('🔎 HAM VERİ vs PARSE EDİLEN VERİ (PORTFÖY)');
+
+    try {
+      const sheet = this._getPortfolioSheet();
+      if (!sheet) {
+        console.log('   ❌ Portföy sheet bulunamadı');
+        return;
+      }
+
+      const rawData = this._readAllData(sheet);
+      const parsedData = this.readPortfolio(forceRefresh);
+
+      console.log(`   Ham satır: ${rawData.length}`);
+      console.log(`   Parse kayıt: ${parsedData.length}`);
+
+      const checks = [
+        ['id', 'ID'],
+        ['baslik', 'BASLIK'],
+        ['kategori', 'KATEGORI'],
+        ['birimi', 'BIRIMI'],
+        ['adet', 'ADET'],
+        ['birimFiyat', 'BIRIM_FIYAT'],
+        ['yatirilanTutar', 'YATIRILAN_TUTAR']
+      ];
+
+      const rowCount = Math.min(limit, rawData.length, parsedData.length);
+      let mismatchCount = 0;
+
+      for (let i = 0; i < rowCount; i++) {
+        const raw = rawData[i];
+        const parsed = parsedData[i];
+        if (!parsed) continue;
+
+        const errors = [];
+        checks.forEach(([field, columnKey]) => {
+          const colIndex = CONFIG.COLUMNS[columnKey];
+          const rawValue = colIndex !== undefined ? this._normalizeForCompare(raw[colIndex]) : '';
+          const parsedValue = this._normalizeForCompare(parsed[field]);
+          if (rawValue !== parsedValue) {
+            errors.push(`${field}: raw="${rawValue}" parsed="${parsedValue}"`);
+          }
+        });
+
+        if (errors.length > 0) {
+          mismatchCount += 1;
+          console.log(`   ⚠️ Satır ${i + 1} farkları:`);
+          errors.forEach(err => console.log(`      - ${err}`));
+        }
+      }
+
+      if (mismatchCount === 0) {
+        console.log(`   ✅ İlk ${rowCount} satırda kritik alanlarda fark yok`);
+      } else {
+        console.log(`   ⚠️ İlk ${rowCount} satırda ${mismatchCount} satırda fark var`);
+      }
+
+    } catch (error) {
+      console.error('❌ Ham/parse karşılaştırma hatası:', error);
     }
-    
-    // Hisse
-    console.log('\n📈 HİSSE GEÇMİŞ VERİSİ:');
-    const stocks = this.readHistoricalStockPrices();
-    console.log(`   Toplam: ${stocks.length} kayıt`);
-    
-    if (stocks.length > 0) {
-      const uniqueStocks = [...new Set(stocks.map(s => s.symbol))];
-      console.log(`   Benzersiz hisse: ${uniqueStocks.length}`);
-    }
-    
-    // Döviz
-    console.log('\n💱 DÖVİZ GEÇMİŞ VERİSİ:');
-    const currencies = this.readHistoricalCurrencyPrices();
-    console.log(`   Toplam: ${currencies.length} kayıt`);
-    
-    if (currencies.length > 0) {
-      const uniqueCurrencies = [...new Set(currencies.map(c => c.symbol))];
-      console.log(`   Benzersiz döviz: ${uniqueCurrencies.length}`);
-    }
-    
-    // Altın
-    console.log('\n🏅 ALTIN GEÇMİŞ VERİSİ:');
-    const golds = this.readHistoricalGoldPrices();
-    console.log(`   Toplam: ${golds.length} kayıt`);
-    
-    if (golds.length > 0) {
-      const uniqueGolds = [...new Set(golds.map(g => g.symbol))];
-      console.log(`   Benzersiz altın türü: ${uniqueGolds.length}`);
-    }
-    
-    console.log('\n' + '='.repeat(80));
+  },
+
+  /**
+   * Geçmiş veriler için ham satır/kayıt sayısı kontrolü
+   */
+  debugHistoricalData(options = {}) {
+    const forceRefresh = options.forceRefresh === true;
+
+    console.log('🔍 GEÇMİŞ VERİ KONTROLÜ (HAM vs PARSE)');
+
+    const checks = [
+      ['HISSE_GECMIS_GUNLUK', 'STOCK', this.readHistoricalStockPrices.bind(this)],
+      ['DOVIZ_GECMIS_GUNLUK', 'CURRENCY', this.readHistoricalCurrencyPrices.bind(this)],
+      ['ALTIN_GECMIS_GUNLUK', 'GOLD', this.readHistoricalGoldPrices.bind(this)]
+    ];
+
+    checks.forEach(([sheetType, label, readerFn]) => {
+      try {
+        const sheet = this._getHistoricalSheet(sheetType);
+        const rawRows = sheet ? this._readHistoricalSheetData(sheet, sheetType) : [];
+        const parsed = readerFn(forceRefresh);
+
+        console.log(`   ${label.padEnd(8)} | ham=${rawRows.length} | parse=${parsed.length}`);
+        if (parsed.length > 0) {
+          const item = parsed[0];
+          console.log(`      ↳ örnek: symbol=${item.symbol || '-'}, date=${item.date || '-'}, close=${item.close || '-'}`);
+        }
+      } catch (e) {
+        console.log(`   ❌ ${label} kontrolünde hata: ${e.message}`);
+      }
+    });
+
+    this.debugCacheStatus({ showSamples: true });
+  },
+
+  /**
+   * Ana debug fonksiyonu: ham/parse doğruluğu + cache kontrolü
+   */
+  debugDataStructure(options = {}) {
+    this.debugRawVsParsed({
+      forceRefresh: options.forceRefresh === true,
+      limit: options.limit || 5
+    });
+
+    this.debugCacheStatus({
+      showSamples: options.showSamples !== false
+    });
+  },
+
+  /**
+   * Tüm debug kontrollerini sırayla çalıştır
+   */
+  debugAllData(options = {}) {
+    console.log('🧪 DATA READER DEBUG (TAM KONTROL)');
+    this.debugDataStructure(options);
+    this.debugHistoricalData(options);
   },
 
   // ==================== MEVCUT YARDIMCI FONKSİYONLAR ====================
@@ -797,55 +896,56 @@ const DataReader = {
   },
 
  _getNumericValue(row, index) {
-  const value = this._getValue(row, index);
-  
-  if (value === '') return 0;
-  if (typeof value === 'number') return value;
-  
-  const str = value.toString().trim();
-  
-  // DEBUG: Hangi string geliyor görelim
-  console.log(`🔢 Dönüştürülen string: "${str}"`);
-  
-  // 1. Boşlukları temizle
+  if (!row || index < 0 || index >= row.length) return 0;
+
+  const rawValue = row[index];
+  if (rawValue === null || rawValue === undefined || rawValue === '') {
+    return this._parseOptions && this._parseOptions.numericEmptyAsNull ? null : 0;
+  }
+  if (typeof rawValue === 'number') return Number.isFinite(rawValue) ? rawValue : 0;
+
+  const str = rawValue.toString().trim();
+  if (str === '') return 0;
+
   let cleanStr = str.replace(/\s/g, '');
-  
-  // 2. TÜRKÇE FORMAT: "1.234,56" veya "5.080,33"
-  if (/^\d{1,3}(\.\d{3})*(,\d+)?$/.test(cleanStr)) {
-    // Binlik ayraçları (nokta) kaldır, ondalık ayracını (virgül) noktaya çevir
+
+  // Türkçe binlik/ondalık: 1.234,56
+  if (/^[-+]?\d{1,3}(\.\d{3})*(,\d+)?$/.test(cleanStr)) {
     cleanStr = cleanStr.replace(/\./g, '').replace(',', '.');
     const num = parseFloat(cleanStr);
-    console.log(`   Türkçe format -> "${str}" -> "${cleanStr}" -> ${num}`);
-    return isNaN(num) ? 0 : num;
+    return Number.isNaN(num) ? 0 : num;
   }
-  
-  // 3. İNGİLİZCE FORMAT: "1,234.56" veya "30.67"
-  if (/^\d{1,3}(,\d{3})*(\.\d+)?$/.test(cleanStr)) {
-    // Binlik ayraçları (virgül) kaldır
+
+  // İngilizce binlik/ondalık: 1,234.56
+  if (/^[-+]?\d{1,3}(,\d{3})*(\.\d+)?$/.test(cleanStr)) {
     cleanStr = cleanStr.replace(/,/g, '');
     const num = parseFloat(cleanStr);
-    console.log(`   İngilizce format -> "${str}" -> "${cleanStr}" -> ${num}`);
-    return isNaN(num) ? 0 : num;
+    return Number.isNaN(num) ? 0 : num;
   }
-  
-  // 4. BASİT ONDALIK: "30,67" veya "12,89"
-  if (/^\d+,\d+$/.test(cleanStr)) {
+
+  // Basit ondalık: 1234.56 / 30.67
+  if (/^[-+]?\d+\.\d+$/.test(cleanStr)) {
+    const num = parseFloat(cleanStr);
+    return Number.isNaN(num) ? 0 : num;
+  }
+
+  // Virgüllü basit ondalık: 30,67
+  if (/^[-+]?\d+,\d+$/.test(cleanStr)) {
     cleanStr = cleanStr.replace(',', '.');
     const num = parseFloat(cleanStr);
-    console.log(`   Basit ondalık -> "${str}" -> "${cleanStr}" -> ${num}`);
-    return isNaN(num) ? 0 : num;
+    return Number.isNaN(num) ? 0 : num;
   }
-  
-  // 5. TAM SAYI: "1244"
-  if (/^\d+$/.test(cleanStr)) {
+
+  // Tam sayı
+  if (/^[-+]?\d+$/.test(cleanStr)) {
     const num = parseFloat(cleanStr);
-    console.log(`   Tam sayı -> "${str}" -> ${num}`);
-    return isNaN(num) ? 0 : num;
+    return Number.isNaN(num) ? 0 : num;
   }
-  
+
   console.warn(`⚠️ Sayıya çevrilemedi: "${str}"`);
   return 0;
  },
+
 
   /**
    * Tarihi parse et
@@ -953,120 +1053,6 @@ const DataReader = {
   },
 
   /**
-   * Veri yapısını debug et (güncellenmiş versiyon)
-   */
-  debugDataStructure() {
-    console.log('🔍 DATA STRUCTURE DEBUG (GÜNCELLENMİŞ)');
-    console.log('='.repeat(80));
-    
-    try {
-      // 1. Cache durumu
-      console.log('\n💾 CACHE DURUMU:');
-      console.log(`   Cache'de veri: ${this._cache.portfolio ? 'EVET' : 'HAYIR'}`);
-      if (this._cache.lastFetchPortfolio) {
-        const age = (new Date().getTime() - this._cache.lastFetchPortfolio.getTime()) / 1000;
-        console.log(`   Son portföy okuma: ${Math.floor(age)} saniye önce`);
-      }
-      
-      // 2. Sheet başlıklarını göster
-      console.log('\n📋 SHEET BAŞLIKLARI:');
-      const headers = this.getColumnHeaders();
-      
-      // 3. CONFIG.COLUMNS mapping'ini göster
-      console.log('\n⚙️ CONFIG.COLUMNS MAPPING (44 sütun):');
-      const columnEntries = Object.entries(CONFIG.COLUMNS);
-      columnEntries.sort((a, b) => a[1] - b[1]);
-      
-      columnEntries.forEach(([key, index]) => {
-        const headerName = headers[index] || 'BOŞ';
-        console.log(`  ${index.toString().padStart(2)}. ${key.padEnd(25)} -> "${headerName}"`);
-      });
-      
-      // 4. İlk birkaç kaydı göster
-      console.log('\n📊 İLK KAYIT (tüm alanlar):');
-      const portfolio = this.readPortfolio();
-      
-      if (portfolio.length > 0) {
-        const sample = portfolio[0];
-        
-        console.log('\n  TEMEL BİLGİLER:');
-        console.log(`     ID: ${sample.id}`);
-        console.log(`     Tarih: ${sample.tarih ? Utilities.formatDate(sample.tarih, 'GMT', 'dd.MM.yyyy') : 'BOŞ'}`);
-        console.log(`     Başlık: ${sample.baslik}`);
-        console.log(`     Kategori: ${sample.kategori}`);
-        console.log(`     İşlem Türü: ${sample.islemTuru}`);
-        console.log(`     Birim: ${sample.birimi}`);
-        console.log(`     Adet: ${sample.adet}`);
-        console.log(`     Birim Fiyat: ${sample.birimFiyat}`);
-        console.log(`     Platform: ${sample.platform}`);
-        
-        console.log('\n  YATIRILAN DEĞERLER:');
-        console.log(`     Yatırılan Tutar: ${sample.yatirilanTutar}`);
-        console.log(`     Yatırılan TL: ${sample.yatirilanTL}`);
-        console.log(`     Yatırılan USD: ${sample.yatirilanUSD}`);
-        
-        console.log('\n  GÜNCEL DEĞERLER:');
-        console.log(`     Güncel Tutar: ${sample.guncelTutar}`);
-        console.log(`     Güncel TL: ${sample.guncelTL}`);
-        
-        console.log('\n  KAR/ZARAR:');
-        console.log(`     Kar/Zarar Tutar: ${sample.karZararTutar}`);
-        console.log(`     Kar/Zarar %: ${sample.karZararYuzde}`);
-        
-        console.log(`\n📈 TOPLAM: ${portfolio.length} kayıt okundu`);
-        
-        // 5. Kategori dağılımı
-        console.log('\n📊 KATEGORİ DAĞILIMI:');
-        const kategoriCounts = {};
-        portfolio.forEach(item => {
-          const kategori = item.kategori || 'BELİRSİZ';
-          kategoriCounts[kategori] = (kategoriCounts[kategori] || 0) + 1;
-        });
-        
-        Object.entries(kategoriCounts)
-          .sort((a, b) => b[1] - a[1])
-          .forEach(([kategori, count]) => {
-            const percentage = ((count / portfolio.length) * 100).toFixed(1);
-            console.log(`  ${kategori}: ${count} (%${percentage})`);
-          });
-          
-      } else {
-        console.log('ℹ️ Portföy boş');
-      }
-      
-      // 6. Geçmiş veri durumu
-      console.log('\n📊 GEÇMİŞ VERİ DURUMU:');
-      const stocks = this.readHistoricalStockPrices();
-      const currencies = this.readHistoricalCurrencyPrices();
-      const golds = this.readHistoricalGoldPrices();
-      
-      console.log(`   Hisse kayıtları: ${stocks.length}`);
-      console.log(`   Döviz kayıtları: ${currencies.length}`);
-      console.log(`   Altın kayıtları: ${golds.length}`);
-      
-      // 7. Güncel fiyatlar
-      console.log('\n💰 GÜNCEL FİYATLAR:');
-      const dolar = this.getDolarPrice();
-      const gramAltin = this.getGramAltinPrice();
-      
-      if (dolar) {
-        const dateStr = dolar.date ? Utilities.formatDate(dolar.date, 'GMT', 'dd.MM.yyyy') : '?';
-        console.log(`   Dolar: ${dolar.price.toFixed(4)} TL (${dateStr})`);
-      }
-      
-      if (gramAltin) {
-        const dateStr = gramAltin.date ? Utilities.formatDate(gramAltin.date, 'GMT', 'dd.MM.yyyy') : '?';
-        console.log(`   Gram Altın: ${gramAltin.price.toFixed(2)} TL (${dateStr})`);
-      }
-      
-      console.log('\n' + '='.repeat(80));
-      
-    } catch (error) {
-      console.error('❌ Debug hatası:', error);
-    }
-  },
-
-  /**
    * Portföy verisini dışa aktar (başka dosyalar için)
    */
   exportPortfolioData() {
@@ -1090,546 +1076,353 @@ const DataReader = {
   }
 };
 /**
- * 🧪 DATA READER TAM TEST FONKSİYONU (PORTFÖY + GEÇMİŞ FİYATLAR)
+ * ==================== DATAREADER TEST YARDIMCILARI ====================
  */
-function test_DataReader_Complete() {
-  console.log('🧪 DATA READER TAM TEST (PORTFÖY + GEÇMİŞ FİYATLAR)');
-  console.log('='.repeat(80));
-  
-  const startTime = new Date();
-  
-  try {
-    // 1. CONFIG kontrolü
-    console.log('\n1️⃣ CONFIG KONTROLÜ');
-    console.log(`   Sheet ID: ${CONFIG.SHEETS.PORTFOY?.ID ? 'VAR' : 'YOK'}`);
-    console.log(`   Portföy Sheet: ${CONFIG.SHEETS.PORTFOY?.NAME || 'YOK'}`);
-    console.log(`   Hisse Sheet: ${CONFIG.SHEETS.HISSE_GECMIS_GUNLUK?.NAME || 'YOK'}`);
-    console.log(`   Döviz Sheet: ${CONFIG.SHEETS.DOVIZ_GECMIS_GUNLUK?.NAME || 'YOK'}`);
-    console.log(`   Altın Sheet: ${CONFIG.SHEETS.ALTIN_GECMIS_GUNLUK?.NAME || 'YOK'}`);
-    
-    // 2. DataReader kontrolü
-    console.log('\n2️⃣ DATA READER KONTROLÜ');
-    if (typeof DataReader !== 'undefined') {
-      console.log('   ✅ DataReader nesnesi mevcut');
-    } else {
-      console.log('   ❌ DataReader nesnesi tanımlı değil');
-      return;
-    }
-    
-    // 3. Portföy okuma testi
-    console.log('\n3️⃣ PORTFÖY OKUMA TESTİ');
-    const portfolioStart = new Date();
-    const portfolio = DataReader.readPortfolio();
-    const portfolioDuration = new Date() - portfolioStart;
-    
-    console.log(`   ✅ ${portfolio.length} kayıt okundu`);
-    console.log(`   ⏱️  Süre: ${portfolioDuration}ms`);
-    
-    if (portfolio.length > 0) {
-      const sample = portfolio[0];
-      console.log(`   📊 Örnek kayıt: ${sample.baslik} (${sample.kategori}) - ${sample.adet} adet`);
-      
-      // Portföy kategorilerini göster
-      const categories = {};
-      portfolio.forEach(item => {
-        const cat = item.kategori || 'BELİRSİZ';
-        categories[cat] = (categories[cat] || 0) + 1;
-      });
-      
-      console.log(`   📈 Kategori dağılımı:`);
-      Object.entries(categories).forEach(([cat, count]) => {
-        console.log(`      ${cat}: ${count} kayıt`);
-      });
-    }
-    
-    // 4. Geçmiş veri okuma testi
-    console.log('\n4️⃣ GEÇMİŞ VERİ OKUMA TESTİ');
-    
-    // Hisse
-    console.log('   📈 Hisse geçmişi okunuyor...');
-    const stocksStart = new Date();
-    const stocks = DataReader.readHistoricalStockPrices();
-    const stocksDuration = new Date() - stocksStart;
-    console.log(`      ✅ ${stocks.length} kayıt (${stocksDuration}ms)`);
-    
-    if (stocks.length > 0) {
-      const uniqueStocks = [...new Set(stocks.map(s => s.symbol))];
-      console.log(`      📊 ${uniqueStocks.length} benzersiz hisse`);
-      
-      if (uniqueStocks.length > 0) {
-        console.log(`      Örnek hisseler: ${uniqueStocks.slice(0, 3).join(', ')}`);
-      }
-    }
-    
-    // Döviz
-    console.log('   💱 Döviz geçmişi okunuyor...');
-    const currenciesStart = new Date();
-    const currencies = DataReader.readHistoricalCurrencyPrices();
-    const currenciesDuration = new Date() - currenciesStart;
-    console.log(`      ✅ ${currencies.length} kayıt (${currenciesDuration}ms)`);
-    
-    if (currencies.length > 0) {
-      const uniqueCurrencies = [...new Set(currencies.map(c => c.symbol))];
-      console.log(`      📊 ${uniqueCurrencies.length} benzersiz döviz`);
-      
-      if (uniqueCurrencies.length > 0) {
-        console.log(`      Örnek dövizler: ${uniqueCurrencies.slice(0, 3).join(', ')}`);
-      }
-    }
-    
-    // Altın
-    console.log('   🏅 Altın geçmişi okunuyor...');
-    const goldStart = new Date();
-    const golds = DataReader.readHistoricalGoldPrices();
-    const goldDuration = new Date() - goldStart;
-    console.log(`      ✅ ${golds.length} kayıt (${goldDuration}ms)`);
-    
-    if (golds.length > 0) {
-      const uniqueGolds = [...new Set(golds.map(g => g.symbol))];
-      console.log(`      📊 ${uniqueGolds.length} benzersiz altın türü`);
-      
-      if (uniqueGolds.length > 0) {
-        console.log(`      Örnek altınlar: ${uniqueGolds.slice(0, 5).join(', ')}`);
-      }
-    }
-    
-    // 5. Güncel fiyat sorgulama testi
-    console.log('\n5️⃣ GÜNCEL FİYAT SORGULAMA TESTİ');
-    
-    // Dolar
-    console.log('   💵 Dolar fiyatı sorgulanıyor...');
-    const dolarStart = new Date();
-    const dolar = DataReader.getDolarPrice();
-    const dolarDuration = new Date() - dolarStart;
-    
-    if (dolar) {
-      const dateStr = dolar.date ? Utilities.formatDate(dolar.date, 'GMT', 'dd.MM.yyyy') : 'Tarih yok';
-      console.log(`      ✅ USD/TRY: ${dolar.price.toFixed(4)} TL (${dateStr}) - ${dolarDuration}ms`);
-    } else {
-      console.log(`      ❌ Dolar fiyatı bulunamadı`);
-    }
-    
-    // Gram altın
-    console.log('   🏅 Gram altın fiyatı sorgulanıyor...');
-    const altinStart = new Date();
-    const gramAltin = DataReader.getGramAltinPrice();
-    const altinDuration = new Date() - altinStart;
-    
-    if (gramAltin) {
-      const dateStr = gramAltin.date ? Utilities.formatDate(gramAltin.date, 'GMT', 'dd.MM.yyyy') : 'Tarih yok';
-      console.log(`      ✅ Gram Altın: ${gramAltin.price.toFixed(2)} TL (${dateStr}) - ${altinDuration}ms`);
-    } else {
-      console.log(`      ❌ Gram altın fiyatı bulunamadı`);
-    }
-    
-    // 6. Portföy varlığı fiyat testi
-    console.log('\n6️⃣ PORTFÖY VARLIĞI FİYAT TESTİ');
-    
-    if (portfolio.length > 0) {
-      // Hisse örneği
-      const hisseItem = portfolio.find(item => item.kategori && item.kategori.includes('Borsa'));
-      if (hisseItem) {
-        console.log(`   📈 Hisse testi: ${hisseItem.baslik}`);
-        const hissePrice = DataReader.getPortfolioItemPrice(hisseItem);
-        if (hissePrice) {
-          console.log(`      ✅ Fiyat: ${hissePrice.price.toFixed(2)} TL`);
-        } else {
-          console.log(`      ❌ Fiyat bulunamadı`);
-        }
-      }
-      
-      // Döviz örneği
-      const dovizItem = portfolio.find(item => item.kategori === 'Döviz' || item.birimi === 'USD' || item.birimi === 'EUR');
-      if (dovizItem) {
-        console.log(`   💱 Döviz testi: ${dovizItem.birim || dovizItem.baslik}`);
-        const dovizPrice = DataReader.getPortfolioItemPrice(dovizItem);
-        if (dovizPrice) {
-          console.log(`      ✅ Fiyat: ${dovizPrice.price.toFixed(4)} TL`);
-        } else {
-          console.log(`      ❌ Fiyat bulunamadı`);
-        }
-      }
-      
-      // Altın örneği
-      const altinItem = portfolio.find(item => item.kategori && item.kategori.includes('Altın'));
-      if (altinItem) {
-        console.log(`   🏅 Altın testi: ${altinItem.baslik}`);
-        const altinPrice = DataReader.getPortfolioItemPrice(altinItem);
-        if (altinPrice) {
-          console.log(`      ✅ Fiyat: ${altinPrice.price.toFixed(2)} TL`);
-        } else {
-          console.log(`      ❌ Fiyat bulunamadı`);
-        }
-      }
-    }
-    
-    // 7. Cache testi
-    console.log('\n7️⃣ CACHE TESTİ');
-    console.log('   İkinci portföy okuması (cache kullanmalı):');
-    const cacheStart = new Date();
-    DataReader.readPortfolio();
-    const cacheDuration = new Date() - cacheStart;
-    console.log(`   ⚡ Cache okuma süresi: ${cacheDuration}ms`);
-    
-    console.log('   Force refresh ile portföy okuması:');
-    const forceStart = new Date();
-    DataReader.readPortfolio(true);
-    const forceDuration = new Date() - forceStart;
-    console.log(`   🔄 Force refresh süresi: ${forceDuration}ms`);
-    
-    // 8. Debug çıktıları
-    console.log('\n8️⃣ DEBUG ÇIKTILARI');
-    console.log('   DataReader.debugDataStructure() çalıştırılıyor...');
-    DataReader.debugDataStructure();
-    
-    // 9. Tüm önemli fiyatlar
-    console.log('\n9️⃣ TÜM ÖNEMLİ FİYATLAR');
-    const allPrices = DataReader.getAllImportantPrices();
-    console.log(`   Dolar: ${allPrices.dolar?.price?.toFixed(4) || 'Bulunamadı'} TL`);
-    console.log(`   Euro: ${allPrices.euro?.price?.toFixed(4) || 'Bulunamadı'} TL`);
-    console.log(`   Gram Altın: ${allPrices.gramAltin?.price?.toFixed(2) || 'Bulunamadı'} TL`);
-    console.log(`   Ons Altın: ${allPrices.onsAltin?.price?.toFixed(2) || 'Bulunamadı'} $`);
-    
-    // 10. Cache temizleme
-    console.log('\n🔟 CACHE TEMİZLEME');
-    DataReader.clearCache();
-    console.log('   ✅ Tüm cache\'ler temizlendi');
-    
-  } catch (error) {
-    console.error('❌ Test hatası:', error);
-    console.error(error.stack);
+function _drNormalizeCompare(value) {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return Number.isFinite(value) ? Number(value.toFixed(8)) : '';
+
+  const str = String(value).trim();
+  if (str === '') return '';
+
+  const compact = str.replace(/\s/g, '');
+  const maybeNumber = Number(compact.replace(',', '.'));
+  if (!Number.isNaN(maybeNumber) && /^[-+]?\d+(?:[\.,]\d+)?$/.test(compact)) {
+    return Number(maybeNumber.toFixed(8));
   }
-  
-  const totalDuration = (new Date().getTime() - startTime.getTime()) / 1000;
-  console.log('\n' + '='.repeat(80));
-  console.log(`⏱️  Toplam süre: ${totalDuration.toFixed(2)} saniye`);
-  console.log('🎉 DATA READER TAM TEST TAMAMLANDI');
+
+  return str;
+}
+
+function _drValuesEquivalent(rawValue, parsedValue, fieldType) {
+  if (fieldType === 'numeric') {
+    const rawEmpty = rawValue === '' || rawValue === null || rawValue === undefined;
+    if (rawEmpty && (parsedValue === 0 || parsedValue === null)) return true;
+  }
+  return rawValue === parsedValue;
+}
+
+function _drSideBySideValue(rawValue, parsedValue) {
+  return `raw="${rawValue}" | parsed="${parsedValue}"`;
+}
+
+function _drCountNonEmptyRawColumn(rows, colIndex) {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+
+  let count = 0;
+  rows.forEach(item => {
+    const row = item && item.__rawRow;
+    if (!Array.isArray(row)) return;
+    const value = row[colIndex];
+    if (value !== '' && value !== null && value !== undefined) {
+      count++;
+    }
+  });
+
+  return count;
+}
+
+function _drFindLatestRecord(records) {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  return [...records].sort((a, b) => {
+    const tA = a && a.date ? new Date(a.date).getTime() : 0;
+    const tB = b && b.date ? new Date(b.date).getTime() : 0;
+    return tB - tA;
+  })[0] || null;
+}
+
+function _drFindLatestBySymbol(records, symbol) {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  const search = String(symbol || '').trim().toLowerCase();
+  const filtered = records.filter(item => String(item && item.symbol ? item.symbol : '').trim().toLowerCase() === search);
+  return _drFindLatestRecord(filtered);
+}
+
+function _drAgeInDays(dateValue) {
+  if (!dateValue) return Infinity;
+  const time = new Date(dateValue).getTime();
+  if (isNaN(time)) return Infinity;
+  return (Date.now() - time) / (24 * 60 * 60 * 1000);
 }
 
 /**
- * 🚀 HIZLI TEST (BASİT KONTROL)
+ * ✅ TEST 1: Ham veri -> parse edilen obje tutarlılığı
+ *
+ * Amaç:
+ * - Portföy satırları için kritik alanlarda ham hücre değeri ile objeye yazılan alanları karşılaştırmak
+ * - Numeric alanlarda "" ve 0'ı eşdeğer kabul ederek false-positive farkları azaltmak
+ * - Test sonunda ham/parsed değerleri yan yana gösteren bir özet basmak
  */
-function test_DataReader_Quick() {
-  console.log('⚡ DATA READER HIZLI TEST');
-  console.log('='.repeat(60));
-  
+function test_DataReader_RawVsParsedConsistency(options) {
+  const opts = options || {};
+  const limit = opts.limit || 50;
+  const previewRows = opts.previewRows || 5;
+  const forceRefresh = opts.forceRefresh === true;
+
+  console.log('🧪 TEST 1 - HAM VERİ / PARSED VERİ TUTARLILIK KONTROLÜ');
+  console.log('='.repeat(90));
+
+  const compareFields = [
+    { key: 'id', col: CONFIG.COLUMNS.ID, type: 'text' },
+    { key: 'baslik', col: CONFIG.COLUMNS.BASLIK, type: 'text' },
+    { key: 'kategori', col: CONFIG.COLUMNS.KATEGORI, type: 'text' },
+    { key: 'birimi', col: CONFIG.COLUMNS.BIRIMI, type: 'text' },
+    { key: 'adet', col: CONFIG.COLUMNS.ADET, type: 'numeric' },
+    { key: 'birimFiyat', col: CONFIG.COLUMNS.BIRIM_FIYAT, type: 'numeric' },
+    { key: 'yatirilanTutar', col: CONFIG.COLUMNS.YATIRILAN_TUTAR, type: 'numeric' },
+    { key: 'guncelTutar', col: CONFIG.COLUMNS.GUNCEL_TUTAR, type: 'numeric' }
+  ];
+
   try {
-    // 1. Portföy
-    console.log('\n📊 PORTFÖY:');
-    const portfolio = DataReader.readPortfolio();
-    console.log(`   ${portfolio.length} kayıt`);
-    
-    if (portfolio.length > 0) {
-      console.log('   İlk 3 kayıt:');
-      portfolio.slice(0, 3).forEach((item, i) => {
-        console.log(`   ${i+1}. ${item.baslik} (${item.kategori}): ${item.adet} adet`);
+    const sheet = DataReader._getPortfolioSheet();
+    if (!sheet) {
+      console.error('❌ Portföy sheet bulunamadı');
+      return { success: false, reason: 'sheet-not-found' };
+    }
+
+    const rawRows = DataReader._readAllData(sheet);
+    const parsedRows = DataReader.readPortfolio(forceRefresh);
+
+    const rowCount = Math.min(limit, rawRows.length, parsedRows.length);
+    const mismatches = [];
+
+    for (let i = 0; i < rowCount; i++) {
+      const raw = rawRows[i];
+      const parsed = parsedRows[i];
+      if (!parsed) continue;
+
+      compareFields.forEach(field => {
+        const rawValue = _drNormalizeCompare(raw[field.col]);
+        const parsedValue = _drNormalizeCompare(parsed[field.key]);
+
+        if (!_drValuesEquivalent(rawValue, parsedValue, field.type)) {
+          mismatches.push({
+            rowNumber: CONFIG.SHEETS.PORTFOY.FIRST_DATA_ROW + i,
+            field: field.key,
+            rawValue: rawValue,
+            parsedValue: parsedValue
+          });
+        }
       });
     }
-    
-    // 2. Geçmiş veriler
-    console.log('\n📈 GEÇMİŞ VERİLER:');
-    const stocks = DataReader.readHistoricalStockPrices();
-    const currencies = DataReader.readHistoricalCurrencyPrices();
-    const golds = DataReader.readHistoricalGoldPrices();
-    
-    console.log(`   Hisse: ${stocks.length} kayıt`);
-    console.log(`   Döviz: ${currencies.length} kayıt`);
-    console.log(`   Altın: ${golds.length} kayıt`);
-    
-    // 3. Güncel fiyatlar
-    console.log('\n💰 GÜNCEL FİYATLAR:');
-    
-    const dolar = DataReader.getDolarPrice();
-    if (dolar) {
-      const dateStr = dolar.date ? Utilities.formatDate(dolar.date, 'GMT', 'dd.MM.yyyy') : '?';
-      console.log(`   💵 Dolar: ${dolar.price.toFixed(4)} TL (${dateStr})`);
-    }
-    
-    const gramAltin = DataReader.getGramAltinPrice();
-    if (gramAltin) {
-      const dateStr = gramAltin.date ? Utilities.formatDate(gramAltin.date, 'GMT', 'dd.MM.yyyy') : '?';
-      console.log(`   🏅 Gram Altın: ${gramAltin.price.toFixed(2)} TL (${dateStr})`);
-    }
-    
-    // 4. Portföy varlığı fiyatı
-    console.log('\n📊 PORTFÖY VARLIĞI FİYATI:');
-    if (portfolio.length > 0) {
-      const sampleItem = portfolio[0];
-      const price = DataReader.getPortfolioItemPrice(sampleItem);
-      if (price) {
-        console.log(`   ${sampleItem.baslik}: ${price.price.toFixed(2)} TL`);
-      }
-    }
-    
-    // 5. Performans
-    console.log('\n⚡ PERFORMANS:');
-    console.log('   Cache temizleniyor...');
-    DataReader.clearCache();
-    
-    console.log('   İlk okuma:');
-    const start1 = new Date();
-    DataReader.readPortfolio();
-    const time1 = new Date() - start1;
-    console.log(`      Portföy: ${time1}ms`);
-    
-    console.log('   İkinci okuma (cache):');
-    const start2 = new Date();
-    DataReader.readPortfolio();
-    const time2 = new Date() - start2;
-    console.log(`      Portföy: ${time2}ms`);
-    
-  } catch (error) {
-    console.error('❌ Hızlı test hatası:', error);
-  }
-  
-  console.log('\n' + '='.repeat(60));
-  console.log('🎉 HIZLI TEST TAMAMLANDI');
-}
 
-/**
- * 📊 GEÇMİŞ VERİ ÖZEL TESTİ
- */
-function test_DataReader_Historical_Data() {
-  console.log('📊 DATA READER GEÇMİŞ VERİ TESTİ');
-  console.log('='.repeat(80));
-  
-  try {
-    // 1. Tüm geçmiş verileri oku
-    console.log('\n1️⃣ TÜM GEÇMİŞ VERİLERİ OKUMA');
-    
-    const stocks = DataReader.readHistoricalStockPrices();
-    const currencies = DataReader.readHistoricalCurrencyPrices();
-    const golds = DataReader.readHistoricalGoldPrices();
-    
-    console.log(`   📈 Hisse: ${stocks.length} kayıt`);
-    console.log(`   💱 Döviz: ${currencies.length} kayıt`);
-    console.log(`   🏅 Altın: ${golds.length} kayıt`);
-    
-    // 2. Örnek kayıtlar göster
-    console.log('\n2️⃣ ÖRNEK KAYITLAR');
-    
-    if (stocks.length > 0) {
-      console.log('   📈 Hisse örneği:');
-      const sampleStock = stocks[0];
-      console.log(`      Sembol: ${sampleStock.symbol}`);
-      console.log(`      Tarih: ${sampleStock.date ? Utilities.formatDate(sampleStock.date, 'GMT', 'dd.MM.yyyy') : '?'}`);
-      console.log(`      Kapanış: ${sampleStock.close}`);
-      console.log(`      Kaynak: ${sampleStock.source}`);
-    }
-    
-    if (currencies.length > 0) {
-      console.log('   💱 Döviz örneği:');
-      const sampleCurrency = currencies[0];
-      console.log(`      Sembol: ${sampleCurrency.symbol}`);
-      console.log(`      Tarih: ${sampleCurrency.date ? Utilities.formatDate(sampleCurrency.date, 'GMT', 'dd.MM.yyyy') : '?'}`);
-      console.log(`      Kapanış: ${sampleCurrency.close}`);
-      console.log(`      Kaynak: ${sampleCurrency.source}`);
-    }
-    
-    if (golds.length > 0) {
-      console.log('   🏅 Altın örneği:');
-      const sampleGold = golds[0];
-      console.log(`      Tür: ${sampleGold.symbol}`);
-      console.log(`      Tarih: ${sampleGold.date ? Utilities.formatDate(sampleGold.date, 'GMT', 'dd.MM.yyyy') : '?'}`);
-      console.log(`      Kapanış: ${sampleGold.close}`);
-      console.log(`      Kaynak: ${sampleGold.source}`);
-    }
-    
-    // 3. Sembol listesi
-    console.log('\n3️⃣ SEMBOL LİSTESİ');
-    
-    if (stocks.length > 0) {
-      const uniqueStocks = [...new Set(stocks.map(s => s.symbol))];
-      console.log(`   📈 ${uniqueStocks.length} benzersiz hisse`);
-      if (uniqueStocks.length > 0) {
-        console.log(`   İlk 5: ${uniqueStocks.slice(0, 5).join(', ')}`);
-      }
-    }
-    
-    if (currencies.length > 0) {
-      const uniqueCurrencies = [...new Set(currencies.map(c => c.symbol))];
-      console.log(`   💱 ${uniqueCurrencies.length} benzersiz döviz`);
-      console.log(`   Tümü: ${uniqueCurrencies.join(', ')}`);
-    }
-    
-    if (golds.length > 0) {
-      const uniqueGolds = [...new Set(golds.map(g => g.symbol))];
-      console.log(`   🏅 ${uniqueGolds.length} benzersiz altın türü`);
-      console.log(`   Tümü: ${uniqueGolds.join(', ')}`);
-    }
-    
-    // 4. Güncel fiyat testi
-    console.log('\n4️⃣ GÜNCEL FİYAT TESTİ');
-    
-    // USDTRY=X fiyatı
-    const usdPrice = DataReader.getCurrentPrice('USDTRY=X', 'CURRENCY');
-    if (usdPrice) {
-      console.log(`   💵 USDTRY=X: ${usdPrice.price.toFixed(4)} TL`);
+    console.log(`📊 Kontrol edilen satır: ${rowCount}`);
+    console.log(`📊 Kontrol edilen alan/satır: ${compareFields.length}`);
+    console.log(`❗ Toplam fark: ${mismatches.length}`);
+
+    if (mismatches.length > 0) {
+      console.log('🔎 İlk 20 fark:');
+      mismatches.slice(0, 20).forEach((m, idx) => {
+        console.log(`${idx + 1}. satır=${m.rowNumber} alan=${m.field} | ${_drSideBySideValue(m.rawValue, m.parsedValue)}`);
+      });
     } else {
-      console.log('   ❌ USDTRY=X fiyatı bulunamadı');
+      console.log('✅ Ham veri ile parse edilen veri tutarlı görünüyor.');
     }
-    
-    // Gram altın fiyatı
-    const gramAltinPrice = DataReader.getCurrentPrice('gram-altin', 'GOLD');
-    if (gramAltinPrice) {
-      console.log(`   🏅 Gram Altın: ${gramAltinPrice.price.toFixed(2)} TL`);
-    } else {
-      console.log('   ❌ Gram Altın fiyatı bulunamadı');
-    }
-    
-    // 5. En güncel tarihler
-    console.log('\n5️⃣ EN GÜNCEL TARİHLER');
-    
-    if (stocks.length > 0) {
-      const latestStock = stocks.reduce((latest, current) => {
-        if (!latest) return current;
-        return (current.date > latest.date) ? current : latest;
-      }, null);
-      
-      if (latestStock) {
-        console.log(`   📈 En güncel hisse: ${latestStock.symbol} - ${Utilities.formatDate(latestStock.date, 'GMT', 'dd.MM.yyyy')}`);
-      }
-    }
-    
-    if (currencies.length > 0) {
-      const latestCurrency = currencies.reduce((latest, current) => {
-        if (!latest) return current;
-        return (current.date > latest.date) ? current : latest;
-      }, null);
-      
-      if (latestCurrency) {
-        console.log(`   💱 En güncel döviz: ${latestCurrency.symbol} - ${Utilities.formatDate(latestCurrency.date, 'GMT', 'dd.MM.yyyy')}`);
-      }
-    }
-    
-  } catch (error) {
-    console.error('❌ Geçmiş veri test hatası:', error);
-  }
-  
-  console.log('\n' + '='.repeat(80));
-  console.log('🎉 GEÇMİŞ VERİ TESTİ TAMAMLANDI');
-}
 
-/**
- * 🚀 TÜM TESTLERİ ÇALIŞTIR
- */
-function run_All_DataReader_Tests() {
-  console.log('🚀 DATA READER TÜM TESTLER BAŞLATILIYOR...\n');
-  
-  // 1. Hızlı test
-  test_DataReader_Quick();
-  
-  console.log('\n' + '='.repeat(100) + '\n');
-  
-  // 2. Geçmiş veri testi
-  test_DataReader_Historical_Data();
-  
-  console.log('\n' + '='.repeat(100) + '\n');
-  
-  // 3. Tam test
-  test_DataReader_Complete();
-  
-  console.log('\n' + '='.repeat(100));
-  console.log('🎊 TÜM DATA READER TESTLERİ BAŞARIYLA TAMAMLANDI!');
-}
+    const previewCount = Math.min(previewRows, rowCount);
+    console.log('\n📌 HAM vs PARSED ÖNİZLEME (YAN YANA):');
+    for (let i = 0; i < previewCount; i++) {
+      const raw = rawRows[i];
+      const parsed = parsedRows[i] || {};
+      const rowNo = CONFIG.SHEETS.PORTFOY.FIRST_DATA_ROW + i;
+      console.log(`\n   Satır ${rowNo}:`);
+      compareFields.forEach(field => {
+        const rawValue = _drNormalizeCompare(raw[field.col]);
+        const parsedValue = _drNormalizeCompare(parsed[field.key]);
+        console.log(`   - ${field.key}: ${_drSideBySideValue(rawValue, parsedValue)}`);
+      });
+    }
 
-/**
- * 📱 WEB UYGULAMASI İÇİN TEST (basit)
- */
-function test_DataReader_For_Web() {
-  console.log('🌐 WEB UYGULAMASI TESTİ');
-  console.log('='.repeat(60));
-  
-  try {
-    const result = {
-      success: true,
-      timestamp: new Date().toISOString(),
-      data: {}
-    };
-    
-    // Portföy
-    const portfolio = DataReader.readPortfolio();
-    result.data.portfolio = {
-      count: portfolio.length,
-      sample: portfolio.length > 0 ? portfolio[0].baslik : null,
-      categories: {}
-    };
-    
-    // Kategoriler
-    portfolio.forEach(item => {
-      const cat = item.kategori || 'BELİRSİZ';
-      result.data.portfolio.categories[cat] = (result.data.portfolio.categories[cat] || 0) + 1;
-    });
-    
-    // Güncel fiyatlar
-    result.data.prices = {
-      dolar: DataReader.getDolarPrice(),
-      gramAltin: DataReader.getGramAltinPrice(),
-      euro: DataReader.getEuroPrice(),
-      onsAltin: DataReader.getOnsAltinPrice()
-    };
-    
-    // Geçmiş veri durumu
-    result.data.historical = {
-      stocks: DataReader.readHistoricalStockPrices().length,
-      currencies: DataReader.readHistoricalCurrencyPrices().length,
-      gold: DataReader.readHistoricalGoldPrices().length
-    };
-    
-    // Console'a yaz
-    console.log(`📊 Portföy: ${result.data.portfolio.count} kayıt`);
-    console.log(`💰 Dolar: ${result.data.prices.dolar?.price?.toFixed(4) || 'N/A'} TL`);
-    console.log(`🏅 Gram Altın: ${result.data.prices.gramAltin?.price?.toFixed(2) || 'N/A'} TL`);
-    console.log(`📈 Hisse geçmişi: ${result.data.historical.stocks} kayıt`);
-    console.log(`💱 Döviz geçmişi: ${result.data.historical.currencies} kayıt`);
-    console.log(`🏅 Altın geçmişi: ${result.data.historical.gold} kayıt`);
-    
-    console.log('\n' + '='.repeat(60));
-    console.log('✅ Web testi başarılı');
-    
-    return result;
-    
-  } catch (error) {
-    console.error('❌ Web testi hatası:', error);
     return {
-      success: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
+      success: mismatches.length === 0,
+      checkedRows: rowCount,
+      checkedFields: compareFields.length,
+      mismatchCount: mismatches.length,
+      mismatches: mismatches
     };
+
+  } catch (error) {
+    console.error('❌ TEST 1 hata:', error);
+    return { success: false, error: error.message };
+  } finally {
+    console.log('='.repeat(90));
   }
 }
 
 /**
- * ⚡ EN HIZLI TEST (sadece kontrol)
+ * ✅ TEST 2: Cache'e basılan payload doğrulaması
+ *
+ * Amaç:
+ * - Portföy/hisse/döviz/altın verisi cache'e gerçekten yazılıyor mu?
+ * - Cache'teki ilk kayıt ile ilgili okuyucu fonksiyonunun ilk kaydı tutarlı mı?
+ * - Cache zaman damgaları oluşuyor mu?
  */
-function quickCheck() {
-  console.log('⚡ HIZLI KONTROL');
-  console.log('='.repeat(50));
-  
-  const start = new Date();
-  
+function test_DataReader_CachePayloadIntegrity(options) {
+  const opts = options || {};
+  const forceRefresh = opts.forceRefresh !== false; // default true
+  const includeAllRecords = opts.includeAllRecords === true;
+  const recordLimit = opts.recordLimit || 10;
+  const freshnessDays = opts.freshnessDays || 3;
+
+  console.log('🧪 TEST 2 - CACHE PAYLOAD BÜTÜNLÜK KONTROLÜ');
+  console.log('='.repeat(90));
+
   try {
-    // Portföy
-    const portfolio = DataReader.readPortfolio();
-    console.log(`📊 Portföy: ${portfolio.length} kayıt`);
-    
-    // Dolar
-    const dolar = DataReader.getDolarPrice();
-    console.log(`💵 Dolar: ${dolar ? dolar.price.toFixed(4) + ' TL' : 'Bulunamadı'}`);
-    
-    // Gram altın
-    const gramAltin = DataReader.getGramAltinPrice();
-    console.log(`🏅 Gram Altın: ${gramAltin ? gramAltin.price.toFixed(2) + ' TL' : 'Bulunamadı'}`);
-    
-    // Hisse geçmişi
-    const stocks = DataReader.readHistoricalStockPrices();
-    console.log(`📈 Hisse geçmişi: ${stocks.length} kayıt`);
-    
+    DataReader.clearCache();
+
+    const portfolio = DataReader.readPortfolio(forceRefresh);
+    const stocks = DataReader.readHistoricalStockPrices(forceRefresh);
+    const currencies = DataReader.readHistoricalCurrencyPrices(forceRefresh);
+    const golds = DataReader.readHistoricalGoldPrices(forceRefresh);
+
+    const checks = [
+      {
+        label: 'portfolio',
+        loaded: portfolio,
+        cache: DataReader._cache.portfolio,
+        lastFetch: DataReader._cache.lastFetchPortfolio
+      },
+      {
+        label: 'historicalSTOCK',
+        loaded: stocks,
+        cache: DataReader._cache.historicalSTOCK,
+        lastFetch: DataReader._cache.lastFetchSTOCK
+      },
+      {
+        label: 'historicalCURRENCY',
+        loaded: currencies,
+        cache: DataReader._cache.historicalCURRENCY,
+        lastFetch: DataReader._cache.lastFetchCURRENCY
+      },
+      {
+        label: 'historicalGOLD',
+        loaded: golds,
+        cache: DataReader._cache.historicalGOLD,
+        lastFetch: DataReader._cache.lastFetchGOLD
+      }
+    ];
+
+    const issues = [];
+
+    checks.forEach(item => {
+      const loadedCount = Array.isArray(item.loaded) ? item.loaded.length : 0;
+      const cacheCount = Array.isArray(item.cache) ? item.cache.length : 0;
+      const hasTimestamp = item.lastFetch instanceof Date && !isNaN(item.lastFetch.getTime());
+
+      console.log(`📦 ${item.label}: loaded=${loadedCount}, cache=${cacheCount}, timestamp=${hasTimestamp ? 'OK' : 'YOK'}`);
+
+      if (loadedCount !== cacheCount) {
+        issues.push(`${item.label}: loaded/cache count farklı (${loadedCount}/${cacheCount})`);
+      }
+
+      if (!hasTimestamp) {
+        issues.push(`${item.label}: lastFetch timestamp yok`);
+      }
+
+      if (loadedCount > 0 && cacheCount > 0) {
+        const loadedFirst = _drNormalizeCompare(JSON.stringify(item.loaded[0]));
+        const cacheFirst = _drNormalizeCompare(JSON.stringify(item.cache[0]));
+        if (loadedFirst !== cacheFirst) {
+          issues.push(`${item.label}: ilk kayıt loaded/cache farklı`);
+        }
+      }
+    });
+
+    console.log(`\n❗ Toplam issue: ${issues.length}`);
+    if (issues.length > 0) {
+      issues.forEach((msg, idx) => console.log(`${idx + 1}. ${msg}`));
+    } else {
+      console.log('✅ Cache payload ve zaman damgaları tutarlı görünüyor.');
+    }
+
+    console.log('\n📌 DB\'DEN OKUNUP CACHE\'E YAZILAN KAYITLAR (YAN YANA):');
+    checks.forEach(item => {
+      const loadedRows = Array.isArray(item.loaded) ? item.loaded : [];
+      const cacheRows = Array.isArray(item.cache) ? item.cache : [];
+      const printCount = includeAllRecords
+        ? Math.min(loadedRows.length, cacheRows.length)
+        : Math.min(recordLimit, loadedRows.length, cacheRows.length);
+
+      console.log(`\n   🔹 ${item.label} | yazdırılan kayıt: ${printCount}/${cacheRows.length}`);
+      for (let i = 0; i < printCount; i++) {
+        const loadedJson = JSON.stringify(loadedRows[i]);
+        const cacheJson = JSON.stringify(cacheRows[i]);
+        console.log(`   ${i + 1}. loaded=${loadedJson}`);
+        console.log(`      cache =${cacheJson}`);
+      }
+    });
+
+    console.log('\n📌 PORTFÖY KOLON DOLULUK KONTROLÜ (DB RAW ROW ÜZERİNDEN):');
+    const portfolioCache = Array.isArray(DataReader._cache.portfolio) ? DataReader._cache.portfolio : [];
+    const trackedColumns = [
+      ['ID', CONFIG.COLUMNS.ID],
+      ['TARIH', CONFIG.COLUMNS.TARIH],
+      ['ISLEM_TURU', CONFIG.COLUMNS.ISLEM_TURU],
+      ['BIRIMI', CONFIG.COLUMNS.BIRIMI],
+      ['BIRIM_FIYAT', CONFIG.COLUMNS.BIRIM_FIYAT],
+      ['BASLIK', CONFIG.COLUMNS.BASLIK],
+      ['ADET', CONFIG.COLUMNS.ADET],
+      ['KATEGORI', CONFIG.COLUMNS.KATEGORI],
+      ['YATIRILAN_TUTAR', CONFIG.COLUMNS.YATIRILAN_TUTAR],
+      ['GUNCEL_TUTAR', CONFIG.COLUMNS.GUNCEL_TUTAR],
+      ['KAR_ZARAR_TUTAR', CONFIG.COLUMNS.KAR_ZARAR_TUTAR],
+      ['VERI_KAYNAGI', CONFIG.COLUMNS.VERI_KAYNAGI]
+    ];
+
+    trackedColumns.forEach(([name, index]) => {
+      const nonEmptyCount = _drCountNonEmptyRawColumn(portfolioCache, index);
+      console.log(`   - ${name} (index=${index}): dolu=${nonEmptyCount}/${portfolioCache.length}`);
+    });
+
+    console.log('\n📌 DÖVİZ GÜNCELLİK KONTROLÜ (LATEST BY SYMBOL):');
+    const latestUsd = _drFindLatestBySymbol(currencies, 'USDTRY=X');
+    const latestEur = _drFindLatestBySymbol(currencies, 'EURTRY=X');
+    const latestCurrencyAny = _drFindLatestRecord(currencies);
+
+    const latestRows = [
+      ['USDTRY=X', latestUsd],
+      ['EURTRY=X', latestEur],
+      ['ANY_CURRENCY_LATEST', latestCurrencyAny]
+    ];
+
+    const freshnessWarnings = [];
+    latestRows.forEach(([label, row]) => {
+      if (!row) {
+        const warn = `⚠️ ${label}: kayıt bulunamadı`;
+        freshnessWarnings.push(warn);
+        console.warn(warn);
+        return;
+      }
+
+      const ageDays = _drAgeInDays(row.date);
+      const dateIso = row.date ? new Date(row.date).toISOString() : 'YOK';
+      const price = row.close !== undefined ? row.close : row.price;
+      console.log(`   - ${label}: date=${dateIso}, ageDays=${ageDays.toFixed(2)}, price=${price}`);
+
+      if (ageDays > freshnessDays) {
+        const warn = `⚠️ ${label} güncellik alarmı: ${ageDays.toFixed(2)} gün (eşik=${freshnessDays})`;
+        freshnessWarnings.push(warn);
+        console.warn(warn);
+      }
+    });
+
+    return {
+      success: issues.length === 0,
+      issues: issues,
+      freshnessWarnings: freshnessWarnings,
+      snapshot: {
+        portfolio: DataReader._cache.portfolio ? DataReader._cache.portfolio.length : 0,
+        historicalSTOCK: DataReader._cache.historicalSTOCK ? DataReader._cache.historicalSTOCK.length : 0,
+        historicalCURRENCY: DataReader._cache.historicalCURRENCY ? DataReader._cache.historicalCURRENCY.length : 0,
+        historicalGOLD: DataReader._cache.historicalGOLD ? DataReader._cache.historicalGOLD.length : 0
+      }
+    };
+
   } catch (error) {
-    console.error('❌ Hata:', error.message);
+    console.error('❌ TEST 2 hata:', error);
+    return { success: false, error: error.message };
+  } finally {
+    console.log('='.repeat(90));
   }
-  
-  const duration = new Date() - start;
-  console.log(`\n⏱️  Süre: ${duration}ms`);
-  console.log('='.repeat(50));
 }

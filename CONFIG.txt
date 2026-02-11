@@ -1,0 +1,333 @@
+/**
+ * CONFIG.GS - SABİTLER DOSYASI
+ *
+ * AMAÇ:
+ * - Tüm sabit değerlerin tek merkezden yönetimi
+ *
+ * KURALLAR:
+ * - Bu dosyada İŞ MANTIĞI YOK
+ * - Sadece sabitler ve konfigürasyonlar bulunur
+ * - Object.freeze ile runtime değişiklikleri engellenir
+ *
+ * KULLANIM ÖRNEKLERİ:
+ * - Sütun: CONFIG.COLUMNS.TARIH
+ * - Mesaj: CONFIG.MESSAGES.ERROR.NO_DATA
+ * - Cache: CONFIG.CACHE.KEYS.PORTFOY_TUM
+ */
+
+/**
+ * @namespace CONFIG
+ */
+const CONFIG = {
+
+  // ============================================================
+  // ALTIN FİYATLARI (Truncgil)
+  // ============================================================
+  ALTIN: {
+    API_URL: 'https://finans.truncgil.com/today.json',
+
+    TURLERI: {
+      'gram-altin': 'Gram Altın',
+      'ceyrek-altin': 'Çeyrek Altın',
+      'yarim-altin': 'Yarım Altın',
+      'tam-altin': 'Tam Altın',
+      'cumhuriyet-altini': 'Cumhuriyet Altını',
+      'ata-altin': 'Ata Altın',
+      'resat-altin': 'Reşat Altın',
+      'hamit-altin': 'Hamit Altın',
+      'ikibucuk-altin': 'İkibuçuk Altın',
+      'gremse-altin': 'Gremse Altın',
+      'besli-altin': 'Beşli Altın',
+
+      '14-ayar-altin': '14 Ayar Altın',
+      '18-ayar-altin': '18 Ayar Altın',
+      '22-ayar-bilezik': '22 Ayar Bilezik',
+
+      'gram-has-altin': 'Gram Has Altın',
+      'gumus': 'Gümüş',
+      'ons': 'Ons Altın',
+      'gram-platin': 'Gram Platin',
+      'gram-paladyum': 'Gram Paladyum'
+    },
+
+    CACHE_DURATION: 300,
+    CACHE_KEY: 'truncgil_fiyatlar'
+  },
+
+  // ============================================================
+  // DÖVİZ GEÇMİŞ AYARLARI
+  // ============================================================
+  DOVIZ: {
+    DEFAULT_RANGE: '2y',
+    UPDATE_RANGE: '5d',
+    MIN_RECORDS: 730,
+    CHECK_DAYS: 1
+  },
+
+  // ============================================================
+  // ALPHA VANTAGE
+  // ============================================================
+  ALPHA_VANTAGE: {
+    API_KEY: 'GI89LTBDZ4FM9LSZ',
+    BASE_URL: 'https://www.alphavantage.co/query',
+    DAILY_FUNCTION: 'TIME_SERIES_DAILY',
+    RATE_LIMIT_PER_MINUTE: 5,
+    RATE_LIMIT_PER_DAY: 25
+  },
+
+  // ============================================================
+  // GOOGLE SHEETS - GÜNCELLENMİŞ
+  // ============================================================
+  SHEETS: {
+    PORTFOY: {
+      ID: '1b59D8Nk5iUnz0KbMk_oHAA8--1q05i52tA_JwY4nftM',
+      NAME: 'Birikim',
+      FIRST_DATA_ROW: 2
+    },
+    
+    HISSE_GECMIS_GUNLUK: {
+      NAME: 'HISSE_GECMIS_GUNLUK',
+      FIRST_DATA_ROW: 2,
+      COLUMNS: {
+        SYMBOL: 0,
+        DATE: 1,
+        OPEN: 2,
+        HIGH: 3,
+        LOW: 4,
+        CLOSE: 5,
+        VOLUME: 6,
+        SOURCE: 7
+      }
+    },
+    
+    DOVIZ_GECMIS_GUNLUK: {
+      NAME: 'DOVIZ_GECMIS_GUNLUK',
+      FIRST_DATA_ROW: 1,
+      COLUMNS: {
+        SYMBOL: 0,
+        DATE: 1,
+        OPEN: 2,
+        HIGH: 3,
+        LOW: 4,
+        CLOSE: 5,
+        SOURCE: 6,
+        TIMESTAMP: 7
+      }
+    },
+    
+    ALTIN_GECMIS_GUNLUK: {
+      NAME: 'ALTIN_GECMIS_GUNLUK',
+      FIRST_DATA_ROW: 2,
+      COLUMNS: {
+        TYPE: 0,
+        DATE: 1,
+        OPEN: 2,
+        HIGH: 3,
+        LOW: 4,
+        CLOSE: 5,
+        VOLUME: 6,
+        SOURCE: 7
+      }
+    }
+  },
+// ============================================================
+  // GEÇMİŞ VERİ SHEET YAPILARI (DEBUG ÇIKTISINA GÖRE)
+  // ============================================================
+
+  // ============================================================
+  // FİYAT YÖNETİMİ
+  // ============================================================
+  PRICE: {
+    DEFAULT_CURRENCY: 'TL',
+    DECIMAL_PLACES: 4,
+    
+    // Önemli varlıklar (her zaman alınacak)
+    IMPORTANT_ASSETS: {
+      USD: 'USDTRY=X',
+      EUR: 'EURTRY=X',
+      GRAM_ALTIN: 'gram-altin',
+      ONS_ALTIN: 'ons'
+    }
+  },
+  // ============================================================
+  // SÜTUN EŞLEŞTİRMELERİ
+  // ============================================================
+  // ==================== SÜTUN EŞLEŞTİRMELERİ (KURAL 1) ====================
+  COLUMNS: {
+
+  // GERÇEK SÜTUNLAR (10 sütun)
+  ID: 0,
+  TARIH: 1,
+  ISLEM_TURU: 2,
+  BIRIMI: 3,
+  BIRIM_FIYAT: 4,
+  BASLIK: 5,
+  ADET: 6,
+  KATEGORI: 7,
+  PLATFORM: 8,
+  DETAYLAR: 9,
+
+  // ==================== YATIRILAN DEĞERLER ====================
+  YATIRILAN_TUTAR: 10,
+  YATIRILAN_TL: 11,
+  YATIRILAN_USD: 12,
+  YATIRILAN_EUR: 13,
+  YATIRILAN_ALTIN: 14,
+
+  // ==================== GÜNCEL DEĞERLER ====================
+  GUNCEL_TUTAR: 15,
+  GUNCEL_TL: 16,
+  GUNCEL_USD: 17,
+  GUNCEL_EUR: 18,
+  GUNCEL_ALTIN: 19,
+
+  // ==================== KAR / ZARAR ====================
+  KAR_ZARAR_TUTAR: 20,
+  KAR_ZARAR_TL: 21,
+  KAR_ZARAR_USD: 22,
+  KAR_ZARAR_EUR: 23,
+  KAR_ZARAR_YUZDE: 24,
+  KAR_ZARAR_ALTIN: 25,
+
+  // ==================== DURUM / GÜNCELLEME ====================
+  FIYAT_GUNCELLEME: 26,
+  DURUM: 27,
+  GUNLUK_DEGISIM: 28,
+  GUNLUK_DEGISIM_TL: 29,
+
+  // ==================== PORTFÖY AĞIRLIK ====================
+  PORTFOY_AGIRLIK: 30,
+  KATEGORI_AGIRLIK: 31,
+
+  // ==================== MALİYET / GETİRİ ====================
+  ORTALAMA_MALIYET: 32,
+  TUTULMA_SURESI: 33,
+  GETIRI_YILLIK: 34,
+
+  // ==================== TEKNİK ANALİZ ====================
+  RSI_14: 35,
+  MOVING_AVERAGE_50: 36,
+
+  // ==================== ALARM ====================
+  ALARM_SEVIYESI: 37,
+  HEDEF_FIYAT: 38,
+  STOP_LOSS: 39,
+
+  // ==================== METADATA ====================
+  NOTLAR: 40,
+  ETIKETLER: 41,
+  HESAPLAMA_TARIHI: 42,
+  VERI_KAYNAGI: 43
+  },
+
+
+  // ============================================================
+  // CACHE
+  // ============================================================
+  CACHE: {
+    PREFIX: 'birikim_',
+    DURATION: 300,
+    KEYS: {
+      PORTFOY_TUM: 'portfoy_tum',
+      PORTFOY_OZET: 'portfoy_ozet',
+      FIYATLAR: 'guncel_fiyatlar',
+      HESAPLAMALAR: 'hesaplamalar'
+    }
+  },
+
+  // ============================================================
+  // API ENDPOINTS
+  // ============================================================
+  API: {
+    TIMEOUT: 10000,
+    MAX_RETRY: 3,
+    ENDPOINTS: {
+      TIME_SERIES_DAILY: 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={key}&outputsize=compact',
+      GLOBAL_QUOTE: 'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={key}',
+      CURRENCY_EXCHANGE: 'https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency={from}&to_currency={to}&apikey={key}',
+      BATCH_STOCKS: 'https://www.alphavantage.co/query?function=BATCH_STOCK_QUOTES&symbols={symbols}&apikey={key}'
+    }
+  },
+
+  // ============================================================
+  // HESAPLAMA
+  // ============================================================
+  CALCULATION: {
+    KOMISYON_ORANI: 0.001,
+    DOLAR_KURU: 43,
+    DECIMAL_PLACES: 2,
+    DATE_FORMAT: 'DD.MM.YYYY',
+    CURRENCY: 'TRY'
+  },
+
+  // ============================================================
+  // MESAJLAR
+  // ============================================================
+  MESSAGES: {
+    SUCCESS: 'İşlem başarılı',
+    ERROR: {
+      NO_DATA: 'Henüz işlem kaydı bulunmuyor',
+      SHEET_NOT_FOUND: 'Google Sheets tablosu bulunamadı.',
+      SHEET_ACCESS_DENIED: 'Tablo erişimi reddedildi.',
+      INVALID_DATA: 'Geçersiz veri formatı',
+      CALCULATION_ERROR: 'Hesaplama sırasında hata oluştu'
+    },
+    WARNING: {
+      OLD_DATA: 'Veriler önbellekten geliyor',
+      EMPTY_FIELDS: 'Bazı alanlar boş'
+    }
+  },
+
+  // ============================================================
+  // DURUMLAR
+  // ============================================================
+  STATUS: {
+    SUCCESS: 'success',
+    ERROR: 'error',
+    WARNING: 'warning',
+    EMPTY: 'empty'
+  },
+
+  // ============================================================
+  // UYGULAMA
+  // ============================================================
+  APP: {
+    VERSION: '1.0.0',
+    NAME: 'Birikim Portföy Takip',
+    MAX_ROWS: 1000,
+    LOGGING: true,
+    DEBUG_MODE: false
+  },
+
+  // ============================================================
+  // İŞLEM TİPLERİ
+  // ============================================================
+  ISLEM_TIPLERI: {
+    ALIS: 'Al',
+    SATIS: 'Sat',
+    AL: 'Al',
+    SAT: 'Sat'
+  },
+
+  // ============================================================
+  // PLATFORMLAR
+  // ============================================================
+  PLATFORMLAR: {
+    BORSA: 'Borsa',
+    DOVIZ: 'Döviz',
+    ALTIN: 'Altın',
+    KRIPTO: 'Kripto',
+    FON: 'Fon',
+    DIGER: 'Diğer'
+  }
+};
+
+// ============================================================
+// FREEZE KORUMASI
+// ============================================================
+Object.freeze(CONFIG);
+Object.freeze(CONFIG.COLUMNS);
+Object.freeze(CONFIG.CACHE);
+Object.freeze(CONFIG.MESSAGES);
+Object.freeze(CONFIG.ISLEM_TIPLERI);
+Object.freeze(CONFIG.PLATFORMLAR);

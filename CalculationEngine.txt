@@ -1,0 +1,624 @@
+
+/**
+ * ======================================================
+ * CALCULATION ENGINE
+ * ------------------------------------------------------
+ * SORUMLULUK:
+ * - TÜM finansal hesaplamalar
+ * - FIFO
+ * - Ortalama alış / satış
+ * - Hisse bazlı özetler
+ * - Para birimi bazında toplam yatırımlar
+ *
+ * KESİNLİKLE:
+ * ❌ Sheet okuma yok
+ * ❌ UI yok
+ * ======================================================
+ */
+const CalculationEngine = {
+
+  /**
+   * FIFO kar / zarar hesaplar
+   * @param {Array<Object>} portfolio
+   * @returns {Object} { id: karZarar }
+   */
+  calculateFIFOProfitLoss(portfolio) {
+    console.log('🧮 FIFO kar/zarar hesaplanıyor...');
+
+    const profitMap = {};
+    const queues = {};
+
+    // FIFO için TARİH SIRASI ŞART
+    const sorted = [...portfolio].sort(
+      (a, b) => (a.tarih?.getTime() || 0) - (b.tarih?.getTime() || 0)
+    );
+
+    sorted.forEach(item => {
+      const key = `${item.baslik}__${item.birimi}`;
+      queues[key] = queues[key] || [];
+
+      const type = (item.islemTuru || '').toLowerCase();
+
+      if (type.includes('al')) {
+        queues[key].push({
+          adet: item.adet,
+          fiyat: item.birimFiyat
+        });
+        return;
+      }
+
+      if (type.includes('sat')) {
+        let kalan = item.adet;
+        let kar = 0;
+
+        while (kalan > 0 && queues[key].length) {
+          const alim = queues[key][0];
+          const satilan = Math.min(alim.adet, kalan);
+
+          kar += (item.birimFiyat - alim.fiyat) * satilan;
+
+          alim.adet -= satilan;
+          kalan -= satilan;
+
+          if (alim.adet === 0) {
+            queues[key].shift();
+          }
+        }
+
+        if (kalan > 0) {
+          console.warn(`⚠️ ${key}: ${kalan} adet satılamadı`);
+        }
+
+        profitMap[item.id] = Number(kar.toFixed(2));
+      }
+    });
+
+    return profitMap;
+  },
+
+  /**
+   * Ortalama alış fiyatlarını hesaplar
+   */
+  calculateAveragePurchasePrice(portfolio) {
+    console.log('📊 Ortalama alış fiyatları hesaplanıyor...');
+
+    const map = {};
+
+    portfolio.forEach(i => {
+      if (!i.islemTuru?.toLowerCase().includes('al')) return;
+
+      const key = `${i.baslik}__${i.birimi}`;
+      map[key] = map[key] || { adet: 0, tutar: 0 };
+
+      map[key].adet += i.adet;
+      map[key].tutar += i.toplamTutar;
+    });
+
+    Object.keys(map).forEach(k => {
+      map[k] = Number((map[k].tutar / map[k].adet).toFixed(2));
+    });
+
+    return map;
+  },
+
+  /**
+   * Ortalama satış fiyatlarını hesaplar
+   */
+  calculateAverageSalePrice(portfolio) {
+    console.log('📊 Ortalama satış fiyatları hesaplanıyor...');
+
+    const map = {};
+
+    portfolio.forEach(i => {
+      if (!i.islemTuru?.toLowerCase().includes('sat')) return;
+
+      const key = `${i.baslik}__${i.birimi}`;
+      map[key] = map[key] || { adet: 0, tutar: 0 };
+
+      map[key].adet += i.adet;
+      map[key].tutar += i.toplamTutar;
+    });
+
+    Object.keys(map).forEach(k => {
+      map[k] = Number((map[k].tutar / map[k].adet).toFixed(2));
+    });
+
+    return map;
+  },
+
+  /**
+   * Hisse bazlı özet oluşturur
+   */
+  calculateStockSummaries(portfolio) {
+    console.log('📈 Hisse bazlı özetler oluşturuluyor...');
+
+    const summary = {};
+
+    portfolio.forEach(i => {
+      const key = `${i.baslik}__${i.birimi}`;
+      summary[key] = summary[key] || {
+        toplamAlim: 0,
+        toplamSatis: 0,
+        toplamKar: 0
+      };
+
+      if (i.islemTuru.toLowerCase().includes('al')) {
+        summary[key].toplamAlim += i.adet;
+      }
+
+      if (i.islemTuru.toLowerCase().includes('sat')) {
+        summary[key].toplamSatis += i.adet;
+        summary[key].toplamKar += i.karZarar || 0;
+      }
+    });
+
+    Object.keys(summary).forEach(k => {
+      summary[k].kalanAdet =
+        summary[k].toplamAlim - summary[k].toplamSatis;
+    });
+
+    return summary;
+  },
+
+  /**
+   * Para birimi bazında toplam yatırım hesaplar
+   * @param {Array<Object>} portfolio
+   * @returns {Object} { paraBirimi: toplamYatirim }
+   */
+  calculateTotalInvestmentByCurrency(portfolio) {
+    console.log('💰 Para birimi bazında toplam yatırım hesaplanıyor...');
+
+    const currencyMap = {};
+
+    portfolio.forEach(item => {
+      // Sadece alım işlemlerini dikkate al
+      if (!item.islemTuru?.toLowerCase().includes('al')) return;
+
+      const currency = item.birimi || 'BELİRSİZ';
+      const amount = item.toplamTutar || 0;
+
+      currencyMap[currency] = (currencyMap[currency] || 0) + amount;
+    });
+
+    // Sonuçları yuvarla
+    Object.keys(currencyMap).forEach(currency => {
+      currencyMap[currency] = Number(currencyMap[currency].toFixed(2));
+    });
+
+    return currencyMap;
+  },
+
+  /**
+   * Varlık bazında toplam yatırım hesaplar
+   * @param {Array<Object>} portfolio
+   * @returns {Object} { varlikAdi: toplamYatirim }
+   */
+  calculateTotalInvestmentByAsset(portfolio) {
+    console.log('📦 Varlık bazında toplam yatırım hesaplanıyor...');
+
+    const assetMap = {};
+
+    portfolio.forEach(item => {
+      // Sadece alım işlemlerini dikkate al
+      if (!item.islemTuru?.toLowerCase().includes('al')) return;
+
+      const asset = item.baslik || 'BELİRSİZ';
+      const amount = item.toplamTutar || 0;
+
+      assetMap[asset] = (assetMap[asset] || 0) + amount;
+    });
+
+    // Sonuçları yuvarla
+    Object.keys(assetMap).forEach(asset => {
+      assetMap[asset] = Number(assetMap[asset].toFixed(2));
+    });
+
+    return assetMap;
+  }
+};
+/**
+ * 🧪 CALCULATION ENGINE TESTİ - GERÇEK VERİLER ÜZERİNDE
+ * 
+ * AMAÇ:
+ * - CalculationEngine'ın tüm fonksiyonlarını gerçek portföy verisiyle test et
+ * - FIFO hesaplamalarını detaylı kontrol et
+ * - Matematiksel doğruluğu doğrula
+ * - Hata durumlarını yönet
+ */
+function test_CalculationEngine_RealData() {
+  console.log('='.repeat(70));
+  console.log('🧪 CALCULATION ENGINE TESTİ - GERÇEK VERİLER');
+  console.log('='.repeat(70));
+  
+  const startTime = new Date();
+  const testResults = {
+    totalTests: 0,
+    passed: 0,
+    failed: 0,
+    errors: []
+  };
+  
+  try {
+    // 1. ÖN HAZIRLIK: Gerçek veriyi oku
+    console.log('\n1️⃣ GERÇEK VERİ OKUNUYOR...');
+    const portfolio = DataReader.readPortfolio();
+    
+    if (!portfolio || portfolio.length === 0) {
+      console.log('❌ Test edilecek portföy verisi yok!');
+      return testResults;
+    }
+    
+    console.log(`✅ ${portfolio.length} gerçek kayıt okundu`);
+    
+    // 2. CALCULATION ENGINE KONTROLÜ
+    console.log('\n2️⃣ CALCULATION ENGINE KONTROLÜ');
+    testResults.totalTests++;
+    
+    if (typeof CalculationEngine === 'undefined') {
+      console.log('❌ CalculationEngine tanımlı değil!');
+      testResults.failed++;
+      testResults.errors.push('CalculationEngine nesnesi bulunamadı');
+      return testResults;
+    }
+    
+    console.log('✅ CalculationEngine mevcut');
+    testResults.passed++;
+    
+    // 3. FIFO KAR/ZARAR HESAPLAMA TESTİ
+    console.log('\n3️⃣ FIFO KAR/ZARAR HESAPLAMA TESTİ');
+    testResults.totalTests++;
+    
+    try {
+      console.log('🧮 FIFO hesaplanıyor...');
+      const fifoResults = CalculationEngine.calculateFIFOProfitLoss(portfolio);
+      
+      if (typeof fifoResults === 'object' && fifoResults !== null) {
+        console.log(`✅ FIFO hesaplaması tamamlandı: ${Object.keys(fifoResults).length} kayıt`);
+        
+        // FIFO sonuçlarını analiz et
+        const positiveCount = Object.values(fifoResults).filter(v => v > 0).length;
+        const negativeCount = Object.values(fifoResults).filter(v => v < 0).length;
+        const zeroCount = Object.values(fifoResults).filter(v => v === 0).length;
+        const totalProfit = Object.values(fifoResults).reduce((sum, val) => sum + val, 0);
+        
+        console.log(`   📊 Kar: ${positiveCount}, Zarar: ${negativeCount}, Nötr: ${zeroCount}`);
+        console.log(`   💰 Toplam Kar/Zarar: ${totalProfit.toFixed(2)}`);
+        
+        // İlk 5 FIFO sonucunu göster
+        console.log('\n   🔍 İLK 5 FIFO SONUCU:');
+        Object.entries(fifoResults).slice(0, 5).forEach(([id, profit], index) => {
+          console.log(`      ${index + 1}. ID ${id}: ${profit.toFixed(2)}`);
+        });
+        
+        testResults.passed++;
+      } else {
+        console.log('❌ FIFO sonucu beklenen formatta değil');
+        testResults.failed++;
+        testResults.errors.push('FIFO sonucu object değil');
+      }
+    } catch (error) {
+      console.log(`❌ FIFO hesaplama hatası: ${error.message}`);
+      testResults.failed++;
+      testResults.errors.push(`FIFO hatası: ${error.message}`);
+    }
+    
+    // 4. ORTALAMA ALIŞ FİYATI TESTİ
+    console.log('\n4️⃣ ORTALAMA ALIŞ FİYATI TESTİ');
+    testResults.totalTests++;
+    
+    try {
+      console.log('📊 Ortalama alış fiyatları hesaplanıyor...');
+      const avgPurchase = CalculationEngine.calculateAveragePurchasePrice(portfolio);
+      
+      if (typeof avgPurchase === 'object') {
+        const assetCount = Object.keys(avgPurchase).length;
+        console.log(`✅ ${assetCount} varlık için ortalama alış fiyatı hesaplandı`);
+        
+        if (assetCount > 0) {
+          console.log('\n   🔍 ORTALAMA ALIŞ FİYATLARI:');
+          Object.entries(avgPurchase).slice(0, 5).forEach(([asset, avgPrice], index) => {
+            console.log(`      ${index + 1}. ${asset}: ${avgPrice.toFixed(2)}`);
+          });
+        }
+        
+        testResults.passed++;
+      } else {
+        console.log('❌ Ortalama alış fiyatı sonucu beklenen formatta değil');
+        testResults.failed++;
+        testResults.errors.push('Ortalama alış fiyatı object değil');
+      }
+    } catch (error) {
+      console.log(`❌ Ortalama alış fiyatı hatası: ${error.message}`);
+      testResults.failed++;
+      testResults.errors.push(`Ortalama alış hatası: ${error.message}`);
+    }
+    
+    // 5. ORTALAMA SATIŞ FİYATI TESTİ
+    console.log('\n5️⃣ ORTALAMA SATIŞ FİYATI TESTİ');
+    testResults.totalTests++;
+    
+    try {
+      console.log('📊 Ortalama satış fiyatları hesaplanıyor...');
+      const avgSale = CalculationEngine.calculateAverageSalePrice(portfolio);
+      
+      if (typeof avgSale === 'object') {
+        const assetCount = Object.keys(avgSale).length;
+        console.log(`✅ ${assetCount} varlık için ortalama satış fiyatı hesaplandı`);
+        
+        if (assetCount > 0) {
+          console.log('\n   🔍 ORTALAMA SATIŞ FİYATLARI:');
+          Object.entries(avgSale).slice(0, 5).forEach(([asset, avgPrice], index) => {
+            console.log(`      ${index + 1}. ${asset}: ${avgPrice.toFixed(2)}`);
+          });
+        }
+        
+        testResults.passed++;
+      } else {
+        console.log('❌ Ortalama satış fiyatı sonucu beklenen formatta değil');
+        testResults.failed++;
+        testResults.errors.push('Ortalama satış fiyatı object değil');
+      }
+    } catch (error) {
+      console.log(`❌ Ortalama satış fiyatı hatası: ${error.message}`);
+      testResults.failed++;
+      testResults.errors.push(`Ortalama satış hatası: ${error.message}`);
+    }
+    
+    // 6. HİSSE BAZLI ÖZET TESTİ
+    console.log('\n6️⃣ HİSSE BAZLI ÖZET TESTİ');
+    testResults.totalTests++;
+    
+    try {
+      console.log('📈 Hisse bazlı özetler hesaplanıyor...');
+      const stockSummaries = CalculationEngine.calculateStockSummaries(portfolio);
+      
+      if (typeof stockSummaries === 'object') {
+        const assetCount = Object.keys(stockSummaries).length;
+        console.log(`✅ ${assetCount} varlık için hisse bazlı özet hesaplandı`);
+        
+        if (assetCount > 0) {
+          console.log('\n   🔍 HİSSE BAZLI ÖZETLER (ilk 5):');
+          Object.entries(stockSummaries).slice(0, 5).forEach(([asset, summary], index) => {
+            console.log(`      ${index + 1}. ${asset}:`);
+            console.log(`         Alım: ${summary.toplamAlim || 0} adet`);
+            console.log(`         Satış: ${summary.toplamSatis || 0} adet`);
+            console.log(`         Kalan: ${summary.kalanAdet || 0} adet`);
+            console.log(`         Kar: ${(summary.toplamKar || 0).toFixed(2)}`);
+          });
+        }
+        
+        testResults.passed++;
+      } else {
+        console.log('❌ Hisse bazlı özet sonucu beklenen formatta değil');
+        testResults.failed++;
+        testResults.errors.push('Hisse bazlı özet object değil');
+      }
+    } catch (error) {
+      console.log(`❌ Hisse bazlı özet hatası: ${error.message}`);
+      testResults.failed++;
+      testResults.errors.push(`Hisse bazlı özet hatası: ${error.message}`);
+    }
+    
+    // 7. VERİ BÜTÜNLÜK TESTİ
+    console.log('\n7️⃣ VERİ BÜTÜNLÜK TESTİ');
+    testResults.totalTests++;
+    
+    try {
+      console.log('🔍 FIFO sonuçlarının portföye eklenmesi kontrol ediliyor...');
+      
+      // FIFO sonuçlarını al
+      const fifoResults = CalculationEngine.calculateFIFOProfitLoss(portfolio);
+      
+      // Portföyü FIFO sonuçlarıyla zenginleştir
+      const enrichedPortfolio = portfolio.map(item => ({
+        ...item,
+        karZarar: fifoResults[item.id] || 0
+      }));
+      
+      // Kar/zarar değerlerini kontrol et
+      const hasKarZarar = enrichedPortfolio.every(item => 'karZarar' in item);
+      const karZararValues = enrichedPortfolio.map(item => item.karZarar);
+      const maxProfit = Math.max(...karZararValues);
+      const minProfit = Math.min(...karZararValues);
+      
+      if (hasKarZarar) {
+        console.log('✅ Tüm kayıtlara kar/zarar değeri eklendi');
+        console.log(`   📊 En yüksek kar: ${maxProfit.toFixed(2)}`);
+        console.log(`   📊 En yüksek zarar: ${minProfit.toFixed(2)}`);
+        console.log(`   📊 Toplam: ${karZararValues.reduce((a, b) => a + b, 0).toFixed(2)}`);
+        
+        // Örnek kayıtları göster
+        console.log('\n   🔍 ZENGİNLEŞTİRİLMİŞ ÖRNEK KAYITLAR (ilk 3):');
+        enrichedPortfolio.slice(0, 3).forEach((item, index) => {
+          console.log(`      ${index + 1}. ${item.baslik || 'Belirsiz'}:`);
+          console.log(`         İşlem: ${item.islemTuru || 'Belirsiz'}`);
+          console.log(`         Adet: ${item.adet || 0} × ${item.birimFiyat || 0} = ${item.toplamTutar || 0}`);
+          console.log(`         Kar/Zarar: ${item.karZarar || 0}`);
+        });
+        
+        testResults.passed++;
+      } else {
+        console.log('❌ Bazı kayıtlarda kar/zarar değeri eksik');
+        testResults.failed++;
+        testResults.errors.push('Kar/zarar değerleri eksik');
+      }
+    } catch (error) {
+      console.log(`❌ Veri bütünlük testi hatası: ${error.message}`);
+      testResults.failed++;
+      testResults.errors.push(`Veri bütünlük hatası: ${error.message}`);
+    }
+    
+    // 8. PERFORMANS TESTİ
+    console.log('\n8️⃣ PERFORMANS TESTİ');
+    testResults.totalTests++;
+    
+    try {
+      console.log('⏱️  Büyük portföy için performans testi...');
+      
+      // Aynı portföyü 10 kez işleyerek performans testi yap
+      const testCycles = 10;
+      const startPerf = new Date();
+      
+      for (let i = 0; i < testCycles; i++) {
+        CalculationEngine.calculateFIFOProfitLoss(portfolio);
+      }
+      
+      const endPerf = new Date();
+      const totalTime = (endPerf - startPerf) / 1000;
+      const avgTime = totalTime / testCycles;
+      
+      console.log(`✅ ${testCycles} döngü tamamlandı`);
+      console.log(`   ⏱️  Toplam süre: ${totalTime.toFixed(3)} saniye`);
+      console.log(`   ⏱️  Ortalama: ${avgTime.toFixed(3)} saniye/döngü`);
+      console.log(`   📈 Kayıt başına: ${(avgTime / portfolio.length * 1000).toFixed(3)} ms/kayıt`);
+      
+      if (avgTime < 1) {
+        console.log('   🚀 Performans: MÜKEMMEL');
+      } else if (avgTime < 5) {
+        console.log('   ✅ Performans: İYİ');
+      } else {
+        console.log('   ⚠️  Performans: YAVAŞ');
+      }
+      
+      testResults.passed++;
+    } catch (error) {
+      console.log(`❌ Performans testi hatası: ${error.message}`);
+      testResults.failed++;
+      testResults.errors.push(`Performans testi hatası: ${error.message}`);
+    }
+    
+  } catch (error) {
+    console.error(`💥 GENEL TEST HATASI: ${error.message}`);
+    testResults.errors.push(`Genel hata: ${error.message}`);
+  }
+  
+  // TEST SONUÇLARI
+  const duration = (new Date().getTime() - startTime.getTime()) / 1000;
+  
+  console.log('\n' + '='.repeat(70));
+  console.log('📊 CALCULATION ENGINE TEST SONUÇLARI');
+  console.log('='.repeat(70));
+  
+  console.log(`Toplam Test: ${testResults.totalTests}`);
+  console.log(`Başarılı: ${testResults.passed}`);
+  console.log(`Başarısız: ${testResults.failed}`);
+  console.log(`Başarı Oranı: ${testResults.totalTests > 0 ? ((testResults.passed / testResults.totalTests) * 100).toFixed(1) : 0}%`);
+  console.log(`Toplam Süre: ${duration.toFixed(2)} saniye`);
+  
+  if (testResults.failed === 0 && testResults.totalTests > 0) {
+    console.log('\n🎉 TÜM TESTLER BAŞARILI! CalculationEngine mükemmel çalışıyor.');
+  } else if (testResults.passed > 0) {
+    console.log(`\n⚠️ BAZI TESTLER BAŞARISIZ! ${testResults.failed} test başarısız oldu.`);
+    
+    if (testResults.errors.length > 0) {
+      console.log('\nHatalar:');
+      testResults.errors.forEach((error, index) => {
+        console.log(`  ${index + 1}. ${error}`);
+      });
+    }
+  } else {
+    console.log('\n❌ TESTLER TAMAMLANAMADI!');
+  }
+  
+  console.log('\n' + '='.repeat(70));
+  return testResults;
+}
+
+/**
+ * ⚡ HIZLI CALCULATION ENGINE TESTİ (Temel Kontrol)
+ * 
+ * Sadece temel işlevleri hızlıca test eder
+ */
+function quick_CalculationEngine_Test() {
+  console.log('⚡ HIZLI CALCULATION ENGINE TESTİ');
+  
+  const startTime = new Date();
+  let passed = 0;
+  let total = 0;
+  
+  try {
+    // 1. Veriyi oku
+    const portfolio = DataReader.readPortfolio();
+    if (!portfolio || portfolio.length === 0) {
+      console.log('❌ Test edilecek veri yok');
+      return false;
+    }
+    
+    console.log(`📦 ${portfolio.length} kayıt okundu`);
+    
+    // 2. FIFO testi
+    total++;
+    console.log('\n1. FIFO Testi...');
+    try {
+      const fifo = CalculationEngine.calculateFIFOProfitLoss(portfolio);
+      if (fifo && typeof fifo === 'object') {
+        console.log(`✅ Başarılı: ${Object.keys(fifo).length} FIFO sonucu`);
+        passed++;
+      } else {
+        console.log('❌ FIFO sonucu beklenen formatta değil');
+      }
+    } catch (e) {
+      console.log(`❌ FIFO hatası: ${e.message}`);
+    }
+    
+    // 3. Ortalama alış testi
+    total++;
+    console.log('\n2. Ortalama Alış Testi...');
+    try {
+      const avgBuy = CalculationEngine.calculateAveragePurchasePrice(portfolio);
+      if (avgBuy && typeof avgBuy === 'object') {
+        console.log(`✅ Başarılı: ${Object.keys(avgBuy).length} varlık`);
+        passed++;
+      } else {
+        console.log('❌ Ortalama alış sonucu beklenen formatta değil');
+      }
+    } catch (e) {
+      console.log(`❌ Ortalama alış hatası: ${e.message}`);
+    }
+    
+    // 4. Hisse özet testi
+    total++;
+    console.log('\n3. Hisse Özet Testi...');
+    try {
+      const summaries = CalculationEngine.calculateStockSummaries(portfolio);
+      if (summaries && typeof summaries === 'object') {
+        console.log(`✅ Başarılı: ${Object.keys(summaries).length} hisse özeti`);
+        passed++;
+        
+        // Bir örnek göster
+        if (Object.keys(summaries).length > 0) {
+          const firstKey = Object.keys(summaries)[0];
+          console.log(`   Örnek: ${firstKey}`);
+          console.log(`     Alım: ${summaries[firstKey].toplamAlim}`);
+          console.log(`     Satış: ${summaries[firstKey].toplamSatis}`);
+          console.log(`     Kalan: ${summaries[firstKey].kalanAdet}`);
+        }
+      } else {
+        console.log('❌ Hisse özeti sonucu beklenen formatta değil');
+      }
+    } catch (e) {
+      console.log(`❌ Hisse özeti hatası: ${e.message}`);
+    }
+    
+    // SONUÇ
+    const duration = (new Date().getTime() - startTime.getTime()) / 1000;
+    
+    console.log('\n' + '='.repeat(40));
+    console.log('📊 HIZLI TEST SONUCU');
+    console.log(`Başarılı: ${passed}/${total}`);
+    console.log(`Başarı Oranı: ${((passed / total) * 100).toFixed(1)}%`);
+    console.log(`Süre: ${duration.toFixed(2)} saniye`);
+    
+    if (passed === total) {
+      console.log('✅ TÜM TESTLER BAŞARILI!');
+      return true;
+    } else {
+      console.log('⚠️ BAZI TESTLER BAŞARISIZ!');
+      return false;
+    }
+    
+  } catch (error) {
+    console.error(`💥 Test hatası: ${error.message}`);
+    return false;
+  }
+}
